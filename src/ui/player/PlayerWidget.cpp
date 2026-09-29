@@ -1,75 +1,147 @@
 #include "PlayerWidget.h"
+#include "PlayerControls.h"
 #include "ui/common/UiComponents.h"
-#include "ui/common/ComboBox.h"
 #include <QVBoxLayout>
+#include <QFormLayout>
 #include <QLabel>
-#include <QComboBox>
 #include <QStackedWidget>
 #include <QPushButton>
-#include <QSignalBlocker>
+#include <QDir>
+#include <QLocale>
 
-PlayerWidget::PlayerWidget(QWidget* parent) : QWidget(parent)
+PlayerWidget::PlayerWidget(ThemeManager* theme, QWidget* parent) : QWidget(parent)
 {
     auto* layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0,0,0,0); layout->setSpacing(0);
+    layout->setContentsMargins(0,0,0,0);
+    layout->setSpacing(0);
     auto* header = new QWidget(this);
-    header->setObjectName("mediaHeader"); header->setAttribute(Qt::WA_StyledBackground);
+    header->setObjectName("mediaHeader");
+    header->setAttribute(Qt::WA_StyledBackground);
     auto* headerLayout = new QHBoxLayout(header);
     headerLayout->setContentsMargins(18,10,16,10);
+    header->setMinimumHeight(54);
+    m_showExplorer = new QPushButton(tr("展开文件树"), header);
+    m_showExplorer->setObjectName("showExplorerButton");
+    m_showExplorer->setToolTip(tr("恢复左侧文件树 (Ctrl+B)"));
+    m_showExplorer->hide();
+    connect(m_showExplorer, &QPushButton::clicked, this, &PlayerWidget::showExplorerRequested);
+    headerLayout->addWidget(m_showExplorer);
     m_title = new QLabel(tr("媒体查看器"), header);
+    m_title->setTextFormat(Qt::PlainText);
     m_title->setMinimumWidth(0);
     m_title->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    m_badge = new QLabel(tr("界面演示"), header); m_badge->setProperty("role", "badge");
-    m_stage = new ComboBox(header);
-    m_stage->setObjectName("previewStage");
-    m_stage->setAccessibleName(tr("演示状态"));
-    m_stage->addItem(tr("播放中"), int(PlaybackStage::Playing));
-    m_stage->addItem(tr("已暂停"), int(PlaybackStage::Paused));
-    m_stage->addItem(tr("加载中"), int(PlaybackStage::Loading));
-    m_stage->addItem(tr("播放失败"), int(PlaybackStage::Failed));
-    m_stage->addItem(tr("播放结束"), int(PlaybackStage::Finished));
-    connect(m_stage, &QComboBox::currentIndexChanged, this, [this] {
-        emit stageRequested(static_cast<PlaybackStage>(m_stage->currentData().toInt()));
-    });
-    headerLayout->addWidget(m_title,1); headerLayout->addWidget(m_badge); headerLayout->addWidget(m_stage);
+    headerLayout->addWidget(m_title,1);
     layout->addWidget(header);
+    m_notice = new QLabel(this);
+    m_notice->setObjectName("browserNotice");
+    m_notice->setTextFormat(Qt::PlainText);
+    m_notice->setWordWrap(true);
+    m_notice->setProperty("role", "error");
+    m_notice->setContentsMargins(20,12,20,12);
+    m_notice->hide();
+    layout->addWidget(m_notice);
     m_stack = new QStackedWidget(this);
-    auto* welcome = new EmptyState(tr("视频与图片，一处浏览"),
-        tr("轻量的本地媒体查看器，让浏览与查看更简单。\n打开目录开始浏览，或先体验 Videx 的界面。"), this);
-    connect(welcome->addAction(tr("打开目录"),true), &QPushButton::clicked, this, &PlayerWidget::openRequested);
-    connect(welcome->addAction(tr("查看界面演示")), &QPushButton::clicked, this, &PlayerWidget::demoRequested);
-    auto* canvas = new QWidget(this);
-    canvas->setObjectName("canvas"); canvas->setAttribute(Qt::WA_StyledBackground);
-    auto* canvasLayout = new QVBoxLayout(canvas);
-    auto* demo = new QLabel(tr("界面演示 · 不会播放真实视频"), canvas);
-    demo->setProperty("role", "badge");
-    canvasLayout->addWidget(demo,0,Qt::AlignLeft);
-    m_preview = new EmptyState({}, {}, canvas);
-    m_retry = m_preview->addAction(tr("重试演示"));
-    connect(m_retry, &QPushButton::clicked, this, [this] { emit stageRequested(PlaybackStage::Playing); });
-    canvasLayout->addWidget(m_preview,1);
-    auto* hint = new QLabel(tr("Space 播放 / 暂停     ← → 跳转     F 全屏     Esc 退出全屏"),canvas);
-    hint->setAlignment(Qt::AlignCenter); hint->setWordWrap(true); hint->setProperty("role", "muted");
-    hint->setContentsMargins(10,10,10,18); canvasLayout->addWidget(hint);
-    m_stack->addWidget(welcome); m_stack->addWidget(canvas);
-    layout->addWidget(m_stack,1);
-    setState({});
-}
-void PlayerWidget::setState(const MediaUiState& state)
-{
-    m_title->setText(state.demo ? state.title : tr("媒体查看器"));
-    m_title->setToolTip(state.title);
-    m_badge->setVisible(state.demo); m_stage->setVisible(state.demo);
-    m_stack->setCurrentIndex(state.demo ? 1 : 0);
-    const QSignalBlocker blocker(m_stage);
-    m_stage->setCurrentIndex(m_stage->findData(int(state.stage)));
-    m_retry->setVisible(state.stage == PlaybackStage::Failed);
-    switch (state.stage) {
-    case PlaybackStage::Playing: m_preview->setText(tr("播放中"),tr("%1\n当前为静态界面演示，尚未接入播放引擎。").arg(state.title)); break;
-    case PlaybackStage::Paused: m_preview->setText(tr("已暂停"),tr("按空格键，继续演示。")); break;
-    case PlaybackStage::Loading: m_preview->setText(tr("正在准备视频…"),tr("这是加载状态预览，可从上方切换其他状态。")); break;
-    case PlaybackStage::Failed: m_preview->setText(tr("暂时无法播放"),tr("模拟错误：无法读取媒体文件。\n点击重试，返回播放演示。")); break;
-    case PlaybackStage::Finished: m_preview->setText(tr("播放结束"),tr("选择其他视频，或点击播放按钮重新开始演示。")); break;
-    case PlaybackStage::Empty: break;
+    m_empty = new EmptyState({}, {}, this);
+    auto* open = m_empty->addAction(tr("打开文件或文件夹"), true);
+    open->setObjectName("welcomeOpenDirectory");
+    connect(open, &QPushButton::clicked, this, &PlayerWidget::openRequested);
+    m_stack->addWidget(m_empty);
+
+    auto* details = new QWidget(this);
+    auto* detailsLayout = new QVBoxLayout(details);
+    detailsLayout->setContentsMargins(32,24,32,24);
+    detailsLayout->setSpacing(18);
+    detailsLayout->addStretch();
+    m_name = new QLabel(details);
+    m_name->setObjectName("selectedFileName");
+    m_name->setProperty("role", "heading");
+    detailsLayout->addWidget(m_name);
+    auto* form = new QFormLayout;
+    form->setHorizontalSpacing(24);
+    form->setVerticalSpacing(16);
+    form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    m_path = new QLabel(details);
+    m_path->setObjectName("selectedFilePath");
+    m_size = new QLabel(details);
+    m_type = new QLabel(details);
+    m_modified = new QLabel(details);
+    for (auto* label : {m_name, m_path, m_size, m_type, m_modified}) {
+        label->setTextFormat(Qt::PlainText);
+        label->setTextInteractionFlags(Qt::TextSelectableByMouse | Qt::TextSelectableByKeyboard);
+        label->setWordWrap(true);
+        label->setMinimumWidth(0);
+        label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     }
+    form->addRow(tr("位置"), m_path);
+    form->addRow(tr("大小"), m_size);
+    form->addRow(tr("扩展名"), m_type);
+    form->addRow(tr("修改时间"), m_modified);
+    detailsLayout->addLayout(form);
+    auto* hint = new QLabel(tr("当前仅显示文件信息，视频播放与图片查看将在后续版本提供。"), details);
+    hint->setProperty("role", "muted");
+    hint->setWordWrap(true);
+    detailsLayout->addWidget(hint);
+    detailsLayout->addStretch();
+    m_stack->addWidget(details);
+    layout->addWidget(m_stack,1);
+    m_controls = new PlayerControls(theme, this);
+    layout->addWidget(m_controls);
+    connect(m_controls, &PlayerControls::fullscreenRequested, this, &PlayerWidget::fullscreenRequested);
+    setDirectory({});
+}
+
+void PlayerWidget::setDirectory(const QString& path)
+{
+    m_directory = path;
+    setNotice({});
+    setFile({});
+}
+
+void PlayerWidget::setFile(const FileDetails& details)
+{
+    setPlaybackMedia(PlaybackMedia::None);
+    setNotice({});
+    const bool selected = !details.path.isEmpty();
+    m_title->setText(selected ? details.name : tr("媒体查看器"));
+    m_title->setToolTip(selected ? details.name : QString{});
+    m_stack->setCurrentIndex(selected ? 1 : 0);
+    if (!selected) {
+        m_name->clear();
+        m_path->clear();
+        m_empty->setText(m_directory.isEmpty() ? tr("视频与图片，一处浏览") : tr("双击打开文件"),
+            m_directory.isEmpty() ? tr("选择本地文件直接查看，或选择文件夹浏览其中的内容。")
+                                  : tr("双击左侧文件树中的文件，在这里查看名称、位置和基本信息。"));
+        return;
+    }
+    refreshFileDetails(details);
+}
+
+void PlayerWidget::refreshFileDetails(const FileDetails& details)
+{
+    m_name->setText(details.name);
+    m_path->setText(QDir::toNativeSeparators(details.path));
+    m_size->setText(tr("%1（%2 字节）").arg(QLocale().formattedDataSize(details.size), QLocale().toString(details.size)));
+    m_type->setText(details.suffix.isEmpty() ? tr("无扩展名") : details.suffix.toUpper());
+    m_modified->setText(QLocale().toString(details.modified, QLocale::ShortFormat));
+}
+
+void PlayerWidget::setNotice(const QString& message)
+{
+    m_notice->setText(message);
+    m_notice->setVisible(!message.isEmpty());
+}
+
+void PlayerWidget::setPlaybackMedia(PlaybackMedia media)
+{
+    m_controls->setVisible(media == PlaybackMedia::Video || media == PlaybackMedia::Audio);
+}
+
+void PlayerWidget::setFullscreen(bool fullscreen)
+{
+    m_controls->setFullscreen(fullscreen);
+}
+
+void PlayerWidget::setExplorerVisible(bool visible)
+{
+    m_showExplorer->setVisible(!visible);
 }

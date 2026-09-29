@@ -4,7 +4,7 @@
 class QLabel;
 class QPushButton;
 class ThemeManager;
-enum class Glyph { Play, Pause, Folder, Volume, Muted, Fullscreen, Settings, Video };
+enum class Glyph { Play, Pause, Folder, Volume, Muted, Fullscreen, Settings, Video, HideSidebar };
 class IconButton : public QToolButton
 {
 public:
@@ -27,4 +27,3 @@ private:
     class QVBoxLayout* m_layout;
 };
 QWidget* settingRow(const QString& title, const QString& description, QWidget* control, QWidget* parent);
-QString formatTime(int seconds);

@@ -1,5 +1,4 @@
 #pragma once
-#include "app/UiState.h"
 #include <QWidget>
 class ThemeManager;
 class IconButton;
@@ -11,7 +10,6 @@ class PlayerControls : public QWidget
     Q_OBJECT
 public:
     PlayerControls(ThemeManager* theme, QWidget* parent = nullptr);
-    void setState(const MediaUiState& state);
     void setFullscreen(bool fullscreen);
 signals:
     void playRequested();

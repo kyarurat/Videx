@@ -5,10 +5,25 @@
 #include <QStyleHints>
 #include <QDebug>
 #include <QFontDatabase>
+#include <QProxyStyle>
+namespace {
+class WidgetStyle final : public QProxyStyle
+{
+public:
+    WidgetStyle() : QProxyStyle(QStringLiteral("Fusion")) {}
+    int styleHint(StyleHint hint, const QStyleOption* option = nullptr,
+                  const QWidget* widget = nullptr, QStyleHintReturn* data = nullptr) const override
+    {
+        // A list popup avoids Fusion's menu-style top/bottom scroll gutters.
+        if (hint == SH_ComboBox_Popup) return 0;
+        return QProxyStyle::styleHint(hint, option, widget, data);
+    }
+};
+}
 ThemeManager::ThemeManager(QObject* parent) : QObject(parent)
 {
     Q_INIT_RESOURCE(resources);
-    QApplication::setStyle(QStringLiteral("Fusion"));
+    QApplication::setStyle(new WidgetStyle);
     QFont font = QFontDatabase::systemFont(QFontDatabase::GeneralFont);
     const QStringList families = QFontDatabase::families();
     for (const auto& family : {QStringLiteral("Microsoft YaHei UI"), QStringLiteral("Noto Sans CJK SC"),
@@ -63,7 +78,7 @@ void ThemeManager::apply()
     const QList<QPair<QString, QString>> tokens = {
         {"@bg", bg}, {"@panel", panel}, {"@text", text}, {"@muted", muted},
         {"@border", border}, {"@hover", hover}, {"@selected", selected},
-        {"@disabled", disabled}, {"@accent", accent}};
+        {"@disabled", disabled}, {"@accent", accent}, {"@error", m_dark ? "#ff938c" : "#b83530"}};
     for (const auto& token : tokens) sheet.replace(token.first, token.second);
     qApp->setStyleSheet(sheet);
     emit themeChanged();

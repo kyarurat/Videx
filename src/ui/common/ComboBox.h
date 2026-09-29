@@ -6,10 +6,7 @@ class ComboBox : public QComboBox
 {
 public:
     explicit ComboBox(QWidget* parent = nullptr);
-    void showPopup() override;
-    void hidePopup() override;
-protected:
-    void paintEvent(QPaintEvent* event) override;
-private:
-    bool m_popupVisible = false;
 };
+
+// Apply the same chevron to Qt-owned combo boxes without replacing their models.
+void styleComboBoxArrow(QComboBox* combo);

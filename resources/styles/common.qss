@@ -16,6 +16,7 @@ QWidget#explorer, QWidget#controls, QWidget#mediaHeader { background: @panel; }
 QWidget#controls { border-top: 1px solid @border; }
 QWidget#mediaHeader { border-bottom: 1px solid @border; }
 QLabel[role="muted"] { color: @muted; }
+QLabel[role="error"] { color: @error; }
 QLabel[role="heading"] { font-size: 22px; font-weight: 600; }
 QLabel[role="section"] { font-size: 12px; font-weight: 600; color: @muted; }
 QLabel[role="badge"] { color: @accent; background: @selected; padding: 3px 8px; border-radius: 3px; font-size: 11px; }
@@ -32,8 +33,8 @@ QComboBox:hover { background: @hover; }
 QComboBox:focus, QComboBox:on { border-color: @accent; }
 QComboBox:on { background: @selected; }
 QComboBox:disabled { color: @disabled; background: @bg; border-color: @border; }
-QComboBox::drop-down { subcontrol-origin: padding; subcontrol-position: top right; width: 28px; border: none; background: transparent; }
-QComboBox::down-arrow { image: none; width: 0; height: 0; }
+QComboBox[customArrow="true"]::drop-down { subcontrol-origin: padding; subcontrol-position: top right; width: 28px; border: none; background: transparent; }
+QComboBox[customArrow="true"]::down-arrow { image: none; width: 0; height: 0; }
 QComboBox QAbstractItemView { background: @panel; color: @text; selection-background-color: @selected; selection-color: @text; border: 1px solid @border; border-radius: 5px; padding: 4px; outline: none; }
 QComboBox QAbstractItemView::item { min-height: 28px; padding: 3px 10px; border: none; border-radius: 3px; }
 QComboBox QAbstractItemView::item:hover { background: @hover; }
@@ -65,8 +66,3 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
 QToolTip { background: @panel; color: @text; border: 1px solid @border; padding: 5px; }
 QFrame#settingRow { border-bottom: 1px solid @border; }
-QWidget#canvas { background: #0b0e12; }
-QWidget#canvas QLabel { color: #eff3f9; }
-QWidget#canvas QLabel[role="muted"] { color: #9caabd; }
-QWidget#canvas QLabel[role="error"] { color: #ff938c; }
-QWidget#canvas QLabel[role="badge"] { color: #85bcff; background: #1b304b; }

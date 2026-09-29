@@ -4,6 +4,7 @@ class QFileSystemModel;
 class QTreeView;
 class QStackedWidget;
 class ThemeManager;
+class QLabel;
 class ExplorerWidget : public QWidget
 {
     Q_OBJECT
@@ -13,12 +14,20 @@ public:
     void setDirectory(const QString& path);
     void clearDirectory();
     void highlightFile(const QString& path);
+    QString directory() const { return m_directory; }
+protected:
+    bool eventFilter(QObject* watched, QEvent* event) override;
 signals:
     void openRequested();
-    void fileActivated(const QString& path);
+    void hideRequested();
+    void fileOpenRequested(const QString& path);
 private:
     QFileSystemModel* m_model = nullptr;
     QTreeView* m_tree;
     QStackedWidget* m_stack;
-    QString m_currentPath;
+    QLabel* m_rootLabel;
+    QLabel* m_hint;
+    QString m_directory;
+    QString m_pendingHighlight;
+    bool m_directoryLoaded = false;
 };

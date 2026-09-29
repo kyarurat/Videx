@@ -10,6 +10,7 @@ public:
     explicit SettingsDialog(QWidget* parent = nullptr);
     void setSettings(const SessionSettings& settings);
     SessionSettings draft() const;
+    void syncVisibility(bool explorerVisible, bool statusBarVisible);
 signals:
     void settingsApplied(const SessionSettings& settings);
 private:
@@ -21,4 +22,6 @@ private:
     QCheckBox* m_status;
     QComboBox* m_rate;
     QComboBox* m_theme;
+    bool m_explorerEdited = false;
+    bool m_statusEdited = false;
 };

@@ -1,5 +1,6 @@
 #include "app/ThemeManager.h"
 #include "ui/MainWindow.h"
+#include "services/SettingsService.h"
 #include <QApplication>
 #include <QLocale>
 #include <QTranslator>
@@ -8,6 +9,7 @@ int main(int argc, char* argv[])
 {
     QApplication app(argc,argv);
     QCoreApplication::setApplicationName(QStringLiteral("Videx"));
+    QCoreApplication::setOrganizationName(QStringLiteral("Videx"));
     QCoreApplication::setApplicationVersion(QStringLiteral("0.1.0"));
     QTranslator translator;
     // Chinese source strings are the fallback until additional catalogs are shipped.
@@ -16,7 +18,8 @@ int main(int argc, char* argv[])
         app.installTranslator(&translator);
     ThemeManager theme;
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/icons/app.png")));
-    MainWindow window(&theme);
+    SettingsService settings;
+    MainWindow window(&theme, &settings);
     window.show();
     return app.exec();
 }

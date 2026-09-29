@@ -8,7 +8,8 @@ set(CMAKE_AUTORCC ON)
 find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets)
 set(VIDEX_SOURCES
     src/app/ThemeManager.cpp src/app/ThemeManager.h
-    src/app/UiPreviewController.cpp src/app/UiPreviewController.h src/app/UiState.h
+    src/app/BrowserController.cpp src/app/BrowserController.h src/app/UiState.h
+    src/services/SettingsService.cpp src/services/SettingsService.h
     src/ui/MainWindow.cpp src/ui/MainWindow.h
     src/ui/common/UiComponents.cpp src/ui/common/UiComponents.h
     src/ui/common/ComboBox.cpp src/ui/common/ComboBox.h
@@ -17,6 +18,7 @@ set(VIDEX_SOURCES
     src/ui/player/PlayerControls.cpp src/ui/player/PlayerControls.h
     src/ui/dialogs/SettingsDialog.cpp src/ui/dialogs/SettingsDialog.h
     src/ui/dialogs/AboutDialog.cpp src/ui/dialogs/AboutDialog.h
+    src/ui/dialogs/OpenPathDialog.cpp src/ui/dialogs/OpenPathDialog.h
     resources/resources.qrc)
 add_library(videx_ui STATIC ${VIDEX_SOURCES})
 target_include_directories(videx_ui PUBLIC src)
@@ -41,6 +43,10 @@ if(BUILD_TESTING)
     target_link_libraries(videx_ui_checks PRIVATE videx_ui)
     add_test(NAME ui_checks COMMAND videx_ui_checks -platform offscreen)
     set_tests_properties(ui_checks PROPERTIES TIMEOUT 60)
+    if(TARGET Qt6::QOffscreenIntegrationPlugin)
+        set_tests_properties(ui_checks PROPERTIES ENVIRONMENT
+            "QT_QPA_PLATFORM_PLUGIN_PATH=$<TARGET_FILE_DIR:Qt6::QOffscreenIntegrationPlugin>")
+    endif()
 endif()
 include(GNUInstallDirs)
 install(TARGETS Videx RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

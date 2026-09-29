@@ -56,6 +56,9 @@ void IconButton::refreshIcon()
             p.drawEllipse(QPointF(7,5),2,2); p.drawEllipse(QPointF(13,10),2,2); p.drawEllipse(QPointF(8,15),2,2); break;
         case Glyph::Video:
             p.drawRoundedRect(QRectF(2,4,16,12),2,2); p.drawLine(7,4,7,16); break;
+        case Glyph::HideSidebar:
+            p.drawRoundedRect(QRectF(2,3,16,14),1,1); p.drawLine(7,3,7,17);
+            p.drawPolyline(QPolygonF{QPointF(14,7),QPointF(11,10),QPointF(14,13)}); break;
         }
         p.end(); icon.addPixmap(pixmap, mode);
     }
@@ -105,11 +108,4 @@ QWidget* settingRow(const QString& title, const QString& description, QWidget* c
     layout->addLayout(labels, 1); layout->addWidget(control);
     control->setAccessibleName(title);
     return frame;
-}
-QString formatTime(int seconds)
-{
-    seconds = qMax(0, seconds);
-    if (seconds >= 3600)
-        return QStringLiteral("%1:%2:%3").arg(seconds/3600).arg(seconds/60%60,2,10,QChar('0')).arg(seconds%60,2,10,QChar('0'));
-    return QStringLiteral("%1:%2").arg(seconds/60,2,10,QChar('0')).arg(seconds%60,2,10,QChar('0'));
 }

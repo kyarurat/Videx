@@ -1,7 +1,7 @@
 #pragma once
 #include <QString>
+#include <QDateTime>
 enum class ThemeMode { System, Dark, Light };
-enum class PlaybackStage { Empty, Playing, Paused, Loading, Failed, Finished };
 struct SessionSettings
 {
     bool restoreDirectory = true;
@@ -12,20 +12,11 @@ struct SessionSettings
     double defaultRate = 1.0;
     ThemeMode theme = ThemeMode::System;
 };
-struct MediaUiState
+struct FileDetails
 {
-    bool demo = false;
     QString path;
-    QString title;
-    PlaybackStage stage = PlaybackStage::Empty;
-    int position = 0;
-    int duration = 0;
-    int volume = 65;
-    bool muted = false;
-    double rate = 1.0;
-    bool canControl() const
-    {
-        return demo && (stage == PlaybackStage::Playing || stage == PlaybackStage::Paused
-                       || stage == PlaybackStage::Finished);
-    }
+    QString name;
+    QString suffix;
+    qint64 size = 0;
+    QDateTime modified;
 };

@@ -8,7 +8,7 @@ AboutDialog::AboutDialog(QWidget* parent) : QDialog(parent)
     setWindowTitle(tr("关于 Videx")); resize(440,320); setMinimumSize(420,300);
     auto* layout = new QVBoxLayout(this); layout->setContentsMargins(32,28,32,24); layout->setSpacing(16);
     auto* title = new QLabel(QStringLiteral("Videx"),this); title->setProperty("role","heading"); layout->addWidget(title);
-    auto* version = new QLabel(tr("版本 %1 · GUI 预览版").arg(QCoreApplication::applicationVersion()),this);
+    auto* version = new QLabel(tr("版本 %1 · 文件浏览").arg(QCoreApplication::applicationVersion()),this);
     version->setProperty("role","badge"); layout->addWidget(version,0,Qt::AlignLeft);
     auto* description = new QLabel(tr("轻量的本地视频与图片查看器。\n视频与图片，一处浏览。"),this);
     description->setWordWrap(true); layout->addWidget(description);
