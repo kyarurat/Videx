@@ -1,0 +1,5 @@
+/build/
+/build-*/
+/.qtcreator/
+*.user
+/artifacts/
