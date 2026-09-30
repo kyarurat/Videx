@@ -1,8 +1,10 @@
 #pragma once
 #include "app/UiState.h"
+#include <QByteArray>
 #include <QMainWindow>
 class ThemeManager;
 class BrowserController;
+class MediaNavigation;
 class SettingsService;
 class ExplorerWidget;
 class PlayerWidget;
@@ -10,6 +12,8 @@ class SettingsDialog;
 class AboutDialog;
 class QLabel;
 class QAction;
+class QSplitter;
+class QCloseEvent;
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
@@ -28,11 +32,16 @@ private:
     void toggleFullscreen();
     void syncFullscreen();
     void changeEvent(QEvent* event) override;
+    void closeEvent(QCloseEvent* event) override;
     ThemeManager* m_theme;
     SettingsService* m_settingsService;
     BrowserController* m_browser;
+    MediaNavigation* m_mediaNavigation;
     ExplorerWidget* m_explorer;
     PlayerWidget* m_player;
+    QSplitter* m_splitter;
+    QByteArray m_visibleSplitterState;
+    QByteArray m_beforeFullscreenGeometry;
     SettingsDialog* m_settingsDialog = nullptr;
     AboutDialog* m_aboutDialog = nullptr;
     QLabel* m_status;

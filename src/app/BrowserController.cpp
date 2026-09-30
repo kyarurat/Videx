@@ -72,7 +72,13 @@ bool BrowserController::openLocation(const QString& path, const QString& file)
         emit errorOccurred(tr("无法打开文件夹：%1\n目录可能已被移动、删除或无法访问，请重新选择。").arg(QDir::toNativeSeparators(path)));
         return false;
     }
-    m_directory = QDir::cleanPath(info.absoluteFilePath());
+    const auto directory = QDir::cleanPath(info.absoluteFilePath());
+    if (directory == m_directory) {
+        if (file.isEmpty()) { clearSelectedFile(); emit fileChanged({}); }
+        else selectFile(file);
+        return true;
+    }
+    m_directory = directory;
     const auto oldRoots = m_rootWatcher->directories();
     if (!oldRoots.isEmpty()) m_rootWatcher->removePaths(oldRoots);
     QStringList rootPaths{m_directory, info.absolutePath()};

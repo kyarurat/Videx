@@ -9,6 +9,25 @@ SettingsService::SettingsService(const QString& filePath)
     m_settings->setFallbacksEnabled(false);
 }
 SettingsService::~SettingsService() = default;
+QByteArray SettingsService::windowGeometry() const
+{
+    return m_settings->value("window/geometry").toByteArray();
+}
+QByteArray SettingsService::splitterState() const
+{
+    return m_settings->value("window/splitterState").toByteArray();
+}
+bool SettingsService::saveWindowLayout(const QByteArray& geometry, const QByteArray& splitter)
+{
+    m_settings->setValue("window/geometry", geometry);
+    m_settings->setValue("window/splitterState", splitter);
+    m_settings->sync();
+    if (m_settings->status() != QSettings::NoError) {
+        qWarning() << "Cannot save window layout in" << m_settings->fileName();
+        return false;
+    }
+    return true;
+}
 SessionSettings SettingsService::loadPreferences() const
 {
     SessionSettings preferences;

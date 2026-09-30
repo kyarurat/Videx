@@ -8,6 +8,8 @@
 #include <QImageReader>
 #include <QPainter>
 #include <QSvgRenderer>
+#include <QSet>
+#include <QImageIOHandler>
 #include <exiv2/exiv2.hpp>
 #include <libraw/libraw.h>
 #include <algorithm>
@@ -143,16 +145,23 @@ int openRawFile(LibRaw& raw, const QString& path)
 
 QStringList ImageDecoder::supportedExtensions()
 {
+    static const QStringList extensions = [] {
     QStringList result = rawExtensions;
     for (const auto& format : QImageReader::supportedImageFormats()) result.append(QString::fromLatin1(format).toLower());
     result.append({"svg", "svgz", "jpg", "jpeg", "png", "heic", "heif", "avif", "hif"});
     result.removeDuplicates();
     return result;
+    }();
+    return extensions;
 }
 
 bool ImageDecoder::isImageCandidate(const QString& path)
 {
-    return supportedExtensions().contains(QFileInfo(path).suffix().toLower());
+    static const QSet<QString> extensions = [] {
+        const auto list = supportedExtensions();
+        return QSet<QString>(list.begin(), list.end());
+    }();
+    return extensions.contains(QFileInfo(path).suffix().toLower());
 }
 
 QList<ImageMetadataEntry> ImageDecoder::photographicMetadata(const QString& path)
@@ -163,8 +172,15 @@ QList<ImageMetadataEntry> ImageDecoder::photographicMetadata(const QString& path
 }
 
 ImageResult ImageDecoder::decode(const QString& path, const std::shared_ptr<std::atomic_bool>& cancelled,
-                                 bool includeMetadata)
+                                 bool includeMetadata, QSize targetSize)
 {
+    // Configure once before any reader in this decoder. The explicit dimension
+    // limit remains in force; 512 MiB permits the advertised 100MP 32-bit image.
+    static const bool configured = [] {
+        if (!qEnvironmentVariableIsSet("QT_IMAGEIO_MAXALLOC")) QImageReader::setAllocationLimit(512);
+        return true;
+    }();
+    Q_UNUSED(configured);
     ImageResult result;
     const auto fail = [&result](const QString& message) {
         result.status = ImageResult::Status::Failed;
@@ -200,12 +216,21 @@ ImageResult ImageDecoder::decode(const QString& path, const std::shared_ptr<std:
         if (!preferRaw) identifiedRaw.reset();
     }
     if (HeifDecoder::recognizes(header)) {
-        result = HeifDecoder::decode(path);
+        result = HeifDecoder::decode(path, cancelled, targetSize);
         if (result.status != ImageResult::Status::Ready) return result;
     } else if (!preferRaw && qtReadable) {
         result.originalSize = reader.size();
         result.format = QString::fromLatin1(reader.format()).toUpper();
         if (!validSize(result.originalSize)) return fail(tr("图片尺寸无效或超过 1 亿像素的限制。"));
+        result.sourceSize = result.originalSize;
+        const bool transpose = reader.transformation().testFlag(QImageIOHandler::TransformationRotate90);
+        if (transpose) result.sourceSize.transpose();
+        if (targetSize.isValid()) {
+            auto target = targetSize;
+            if (transpose) target.transpose();
+            reader.setScaledSize(result.originalSize.scaled(target, Qt::KeepAspectRatio)
+                                 .boundedTo(result.originalSize));
+        }
         result.image = reader.read();
         if (result.image.isNull()) return fail(tr("无法读取图片：%1").arg(reader.errorString()));
         for (const auto& key : result.image.textKeys())
@@ -215,7 +240,8 @@ ImageResult ImageDecoder::decode(const QString& path, const std::shared_ptr<std:
         if (!svg.isValid()) return fail(tr("无法读取 SVG 图片。"));
         result.originalSize = svg.defaultSize();
         if (!validSize(result.originalSize)) return fail(tr("SVG 尺寸无效或过大。"));
-        result.image = QImage(result.originalSize, QImage::Format_ARGB32_Premultiplied);
+        result.image = QImage(targetSize.isValid() ? result.originalSize.scaled(targetSize, Qt::KeepAspectRatio)
+                             .boundedTo(result.originalSize) : result.originalSize, QImage::Format_ARGB32_Premultiplied);
         if (result.image.isNull()) return fail(tr("图片所需内存不足。"));
         result.image.fill(Qt::transparent);
         QPainter painter(&result.image);
@@ -237,15 +263,39 @@ ImageResult ImageDecoder::decode(const QString& path, const std::shared_ptr<std:
         }
         result.originalSize = QSize(raw.imgdata.sizes.width, raw.imgdata.sizes.height);
         if (!validSize(result.originalSize)) return fail(tr("RAW 图片超过 1 亿像素的限制。"));
-        if ((error = raw.unpack()) == LIBRAW_SUCCESS) error = raw.dcraw_process();
-        if (cancelled->load()) { result.status = ImageResult::Status::Cancelled; return result; }
-        if (error != LIBRAW_SUCCESS) return fail(tr("RAW 解码失败：%1").arg(QString::fromLatin1(libraw_strerror(error))));
-        std::unique_ptr<libraw_processed_image_t, decltype(&LibRaw::dcraw_clear_mem)> decoded(
-            raw.dcraw_make_mem_image(&error), &LibRaw::dcraw_clear_mem);
-        if (!decoded || decoded->type != LIBRAW_IMAGE_BITMAP || decoded->colors != 3 || decoded->bits != 8)
-            return fail(tr("RAW 解码未能生成可显示的图片。"));
-        result.image = QImage(decoded->data, decoded->width, decoded->height,
-                              decoded->width * 3, QImage::Format_RGB888).copy();
+        result.sourceSize = result.originalSize;
+        const int flip = raw.imgdata.sizes.flip;
+        if (flip == 5 || flip == 6) result.sourceSize.transpose();
+        // Embedded previews avoid sensor unpacking when a camera provided one.
+        if (targetSize.isValid() && raw.unpack_thumb() == LIBRAW_SUCCESS) {
+            std::unique_ptr<libraw_processed_image_t, decltype(&LibRaw::dcraw_clear_mem)> thumb(
+                raw.dcraw_make_mem_thumb(&error), &LibRaw::dcraw_clear_mem);
+            if (thumb && thumb->type == LIBRAW_IMAGE_JPEG)
+                result.image = QImage::fromData(thumb->data, int(thumb->data_size), "JPEG");
+            else if (thumb && thumb->type == LIBRAW_IMAGE_BITMAP && thumb->colors == 3 && thumb->bits == 8)
+                result.image = QImage(thumb->data, thumb->width, thumb->height,
+                                     thumb->width * 3, QImage::Format_RGB888).copy();
+            if (!result.image.isNull()) {
+                QTransform orientation;
+                if (flip == 3) orientation.rotate(180);
+                else if (flip == 5) orientation.rotate(-90);
+                else if (flip == 6) orientation.rotate(90);
+                result.image = result.image.transformed(orientation);
+            }
+        }
+        if (result.image.isNull()) {
+            raw.imgdata.params.half_size = targetSize.isValid() ? 1 : 0;
+            if ((error = raw.unpack()) == LIBRAW_SUCCESS) error = raw.dcraw_process();
+            if (cancelled->load()) { result.status = ImageResult::Status::Cancelled; return result; }
+            if (error != LIBRAW_SUCCESS) return fail(tr("RAW 解码失败：%1").arg(QString::fromLatin1(libraw_strerror(error))));
+            std::unique_ptr<libraw_processed_image_t, decltype(&LibRaw::dcraw_clear_mem)> decoded(
+                raw.dcraw_make_mem_image(&error), &LibRaw::dcraw_clear_mem);
+            if (!decoded || decoded->type != LIBRAW_IMAGE_BITMAP || decoded->colors != 3 || decoded->bits != 8)
+                return fail(tr("RAW 解码未能生成可显示的图片。"));
+            result.image = QImage(decoded->data, decoded->width, decoded->height,
+                                  decoded->width * 3, QImage::Format_RGB888).copy();
+            if (!targetSize.isValid()) result.sourceSize = result.image.size();
+        }
         result.format = QStringLiteral("RAW");
         if (rawCandidate) result.format += " / " + suffix.toUpper();
         result.metadata.append({tr("相机厂商"), QString::fromUtf8(raw.imgdata.idata.make)});
@@ -256,7 +306,13 @@ ImageResult ImageDecoder::decode(const QString& path, const std::shared_ptr<std:
     }
     if (cancelled->load()) { result.image = {}; result.status = ImageResult::Status::Cancelled; return result; }
     if (result.image.isNull()) return fail(tr("图片所需内存不足。"));
+    if (!result.sourceSize.isValid()) result.sourceSize = result.originalSize;
+    if (targetSize.isValid() && (result.image.width() > targetSize.width() || result.image.height() > targetSize.height()))
+        result.image = result.image.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    result.fullResolution = !targetSize.isValid() || result.image.size() == result.sourceSize;
     if (result.image.colorSpace().isValid()) result.image.convertToColorSpace(QColorSpace::SRgb);
+    result.image = result.image.convertToFormat(result.image.hasAlphaChannel()
+        ? QImage::Format_ARGB32_Premultiplied : QImage::Format_RGB32);
     if (includeMetadata) readMetadata(path, result);
     result.status = ImageResult::Status::Ready;
     return result;

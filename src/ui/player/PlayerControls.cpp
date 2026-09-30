@@ -5,26 +5,36 @@
 #include <QSlider>
 #include <QLabel>
 #include <QComboBox>
+#include <QSignalBlocker>
+#include "media/MpvPlayer.h"
+#include "media/PlaybackTime.h"
+#include <limits>
 
 PlayerControls::PlayerControls(ThemeManager* theme, QWidget* parent) : QWidget(parent)
 {
     setObjectName("controls"); setAttribute(Qt::WA_StyledBackground);
     auto* layout = new QHBoxLayout(this);
     layout->setContentsMargins(16,12,16,12); layout->setSpacing(14);
-    m_play = new IconButton(Glyph::Play,tr("播放 / 暂停（尚未接入）"),theme,this);
+    m_play = new IconButton(Glyph::Play,tr("播放 / 暂停 (Space)"),theme,this);
     m_play->setObjectName("playButton");
     m_seek = new QSlider(Qt::Horizontal,this); m_seek->setAccessibleName(tr("播放进度")); m_seek->setObjectName("seekSlider");
     m_time = new QLabel(QStringLiteral("00:00 / 00:00"),this); m_time->setMinimumWidth(124); m_time->setAlignment(Qt::AlignCenter);
     m_rate = new ComboBox(this); m_rate->setAccessibleName(tr("播放倍速"));
     for (double rate : {0.5,0.75,1.0,1.25,1.5,1.75,2.0}) m_rate->addItem(tr("%1×").arg(rate),rate);
-    m_mute = new IconButton(Glyph::Volume,tr("静音（尚未接入）"),theme,this);
+    m_mute = new IconButton(Glyph::Volume,tr("静音 (M)"),theme,this);
     m_mute->setCheckable(true);
     m_volume = new QSlider(Qt::Horizontal,this); m_volume->setRange(0,100); m_volume->setFixedWidth(88); m_volume->setAccessibleName(tr("音量"));
+    m_volume->setObjectName("volumeSlider");
+    m_volume->setToolTip(tr("音量 (↑ / ↓)"));
+    m_rate->setToolTip(tr("播放倍速"));
     m_fullscreen = new IconButton(Glyph::Fullscreen,tr("全屏 (F)"),theme,this); m_fullscreen->setCheckable(true);
     layout->addWidget(m_play); layout->addWidget(m_seek,1); layout->addWidget(m_time);
     layout->addWidget(m_rate); layout->addWidget(m_mute); layout->addWidget(m_volume); layout->addWidget(m_fullscreen);
     connect(m_play,&QToolButton::clicked,this,&PlayerControls::playRequested);
-    connect(m_seek,&QSlider::valueChanged,this,&PlayerControls::seekRequested);
+    connect(m_seek,&QSlider::sliderReleased,this,[this] { emit seekRequested(m_seek->value()); });
+    connect(m_seek,&QSlider::valueChanged,this,[this](int seconds) {
+        if (!m_seek->isSliderDown()) emit seekRequested(seconds);
+    });
     connect(m_volume,&QSlider::valueChanged,this,&PlayerControls::volumeRequested);
     connect(m_mute,&QToolButton::clicked,this,&PlayerControls::muteRequested);
     connect(m_fullscreen,&QToolButton::clicked,this,&PlayerControls::fullscreenRequested);
@@ -34,8 +44,28 @@ PlayerControls::PlayerControls(ThemeManager* theme, QWidget* parent) : QWidget(p
     m_rate->setCurrentIndex(m_rate->findData(1.0));
     for (QWidget* widget : QList<QWidget*>{m_play,m_seek,m_mute,m_volume,m_rate}) {
         widget->setEnabled(false);
-        widget->setToolTip(tr("视频播放尚未接入"));
     }
+    m_seek->setToolTip(tr("请先打开视频或音频"));
+}
+void PlayerControls::updateState(const PlaybackSnapshot& state)
+{
+    const QSignalBlocker seekBlock(m_seek), volumeBlock(m_volume), rateBlock(m_rate), muteBlock(m_mute);
+    m_play->setEnabled(state.loaded);
+    m_play->setGlyph(state.paused || state.ended ? Glyph::Play : Glyph::Pause);
+    m_seek->setEnabled(state.loaded && state.seekable && state.duration > 0);
+    m_seek->setToolTip(state.seekable ? tr("播放进度（拖动或使用方向键调整）") : tr("当前媒体不支持进度跳转"));
+    const int duration = int(qBound(0.0, state.duration, double(std::numeric_limits<int>::max())));
+    m_seek->setRange(0, duration);
+    if (!m_seek->isSliderDown()) m_seek->setValue(int(qBound(0.0, state.position, double(duration))));
+    m_time->setText(formatPlaybackTime(state.position) + QStringLiteral(" / ")
+        + (state.duration > 0 ? formatPlaybackTime(state.duration) : QStringLiteral("--:--")));
+    m_volume->setEnabled(state.loaded);
+    if (!m_volume->isSliderDown() || !state.loaded) m_volume->setValue(qRound(state.volume));
+    m_rate->setEnabled(state.loaded);
+    m_rate->setCurrentIndex(m_rate->findData(state.rate));
+    m_mute->setEnabled(state.loaded);
+    m_mute->setChecked(state.muted);
+    m_mute->setGlyph(state.muted ? Glyph::Muted : Glyph::Volume);
 }
 void PlayerControls::setFullscreen(bool fullscreen)
 {

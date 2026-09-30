@@ -1,6 +1,6 @@
-# 图片依赖与许可
+# 媒体依赖与许可
 
-不调用命令行图片转换程序，不上传照片，不在应用运行时下载编解码器。第三方库用于原生图片解码和只读元数据解析。
+不调用命令行图片转换程序，不上传媒体，不在应用运行时下载编解码器。第三方库用于原生图片解码、只读元数据解析和音视频播放。libmpv 由外部 SDK 或系统包提供，其 FFmpeg 与编解码依赖、版权和源码材料应按所选构建一并保留。
 
 | 组件 | 默认源码版本 | 用途 | 上游许可 |
 | --- | --- | --- | --- |
@@ -8,6 +8,7 @@
 | [LibRaw](https://github.com/LibRaw/LibRaw) | 0.22.2 | 相机传感器 RAW 解码 | LGPL-2.1 / CDDL 双许可，见上游文件 |
 | [Exiv2](https://github.com/Exiv2/exiv2) | 0.28.9 | EXIF、IPTC、XMP、GPS、厂商元数据 | GPL-2.0-or-later |
 | [zlib](https://github.com/madler/zlib) | 1.3.1 | PNG 元数据、DNG Deflate 解码 | zlib |
+| [mpv / libmpv](https://github.com/mpv-player/mpv) | 外部 SDK / 系统包 | 音视频解码、播放与 OpenGL 视频渲染 | 依构建配置为 GPL / LGPL；以分发构建为准 |
 | [libheif](https://github.com/strukturag/libheif) | 1.21.2 | HEIF/AVIF 容器和像素输出 | LGPL，见上游 COPYING |
 | [libde265](https://github.com/strukturag/libde265) | 1.0.19 | HEIC 的 HEVC 解码 | LGPL，见上游 COPYING |
 | [libaom](https://aomedia.googlesource.com/aom/) | 3.13.3 | AVIF 的 AV1 解码 | BSD-2-Clause 及 AOM Patent License |

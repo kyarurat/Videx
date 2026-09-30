@@ -17,7 +17,7 @@ bool HeifDecoder::recognizes(const QByteArray& header)
     return false;
 }
 
-ImageResult HeifDecoder::decode(const QString& path)
+ImageResult HeifDecoder::decode(const QString& path, const std::shared_ptr<std::atomic_bool>& cancelled, QSize targetSize)
 {
     ImageResult result;
     result.status = ImageResult::Status::Failed;
@@ -42,9 +42,35 @@ ImageResult HeifDecoder::decode(const QString& path)
         return result;
     }
     result.originalSize = QSize(width, height);
+    // Prefer a container thumbnail, but keep source dimensions for zoom/pan.
+    heif_image_handle* rawThumbnail = nullptr;
+    std::unique_ptr<heif_image_handle, decltype(&heif_image_handle_release)> thumbnail(nullptr, &heif_image_handle_release);
+    heif_item_id id = 0;
+    if (targetSize.isValid() && heif_image_handle_get_list_of_thumbnail_IDs(handle.get(), &id, 1) > 0
+        && heif_image_handle_get_thumbnail(handle.get(), id, &rawThumbnail).code == heif_error_Ok)
+        thumbnail.reset(rawThumbnail);
+    auto* decodeHandle = thumbnail ? thumbnail.get() : handle.get();
+    std::unique_ptr<heif_decoding_options, decltype(&heif_decoding_options_free)> options(
+        heif_decoding_options_alloc(), &heif_decoding_options_free);
+#if LIBHEIF_NUMERIC_VERSION >= 0x01140000
+    if (options) {
+        options->cancel_decoding = [](void* token) { return static_cast<std::atomic_bool*>(token)->load() ? 1 : 0; };
+        options->progress_user_data = cancelled.get();
+    }
+#endif
+    if (cancelled->load()) { result.status = ImageResult::Status::Cancelled; return result; }
     heif_image* rawImage = nullptr;
-    error = heif_decode_image(handle.get(), &rawImage, heif_colorspace_RGB, heif_chroma_interleaved_RGBA, nullptr);
+    error = heif_decode_image(decodeHandle, &rawImage, heif_colorspace_RGB, heif_chroma_interleaved_RGBA, options.get());
     std::unique_ptr<heif_image, decltype(&heif_image_release)> decoded(rawImage, &heif_image_release);
+    if (cancelled->load()) { result.status = ImageResult::Status::Cancelled; return result; }
+    if (thumbnail && error.code != heif_error_Ok) {
+        decoded.reset();
+        decodeHandle = handle.get();
+        rawImage = nullptr;
+        error = heif_decode_image(decodeHandle, &rawImage, heif_colorspace_RGB, heif_chroma_interleaved_RGBA, options.get());
+        decoded.reset(rawImage);
+        if (cancelled->load()) { result.status = ImageResult::Status::Cancelled; return result; }
+    }
     if (error.code != heif_error_Ok || !decoded) {
         if (error.code == heif_error_Unsupported_feature) {
             result.status = ImageResult::Status::Unsupported;
@@ -55,11 +81,12 @@ ImageResult HeifDecoder::decode(const QString& path)
     int stride = 0;
     const auto* pixels = heif_image_get_plane_readonly(decoded.get(), heif_channel_interleaved, &stride);
     if (!pixels) return result;
-    result.image = QImage(pixels, width, height, stride, QImage::Format_RGBA8888).copy();
-    const size_t profileSize = heif_image_handle_get_raw_color_profile_size(handle.get());
+    result.image = QImage(pixels, heif_image_get_width(decoded.get(), heif_channel_interleaved),
+                         heif_image_get_height(decoded.get(), heif_channel_interleaved), stride, QImage::Format_RGBA8888).copy();
+    const size_t profileSize = heif_image_handle_get_raw_color_profile_size(decodeHandle);
     if (profileSize > 0 && profileSize <= 4 * 1024 * 1024) {
         QByteArray profile(static_cast<qsizetype>(profileSize), Qt::Uninitialized);
-        if (heif_image_handle_get_raw_color_profile(handle.get(), profile.data()).code == heif_error_Ok)
+        if (heif_image_handle_get_raw_color_profile(decodeHandle, profile.data()).code == heif_error_Ok)
             result.image.setColorSpace(QColorSpace::fromIccProfile(profile));
     }
     result.format = QStringLiteral("HEIF / AVIF");

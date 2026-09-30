@@ -8,7 +8,7 @@ if(WIN32)
         if(NOT EXISTS "${videx_openmp_runtime}")
             message(FATAL_ERROR "OpenMP enabled but libgomp-1.dll was not found beside the compiler")
         endif()
-        foreach(executable Videx videx_image_checks videx_ui_checks videx_raw_benchmark)
+        foreach(executable Videx videx_image_checks videx_ui_checks videx_playback_checks videx_playback_lifecycle_checks videx_raw_benchmark)
             if(TARGET ${executable})
                 add_custom_command(TARGET ${executable} POST_BUILD
                     COMMAND "${CMAKE_COMMAND}" -E copy_if_different
@@ -20,7 +20,7 @@ if(WIN32)
     foreach(dependency Exiv2::exiv2lib heif)
         get_target_property(dependency_type ${dependency} TYPE)
         if(dependency_type STREQUAL "SHARED_LIBRARY")
-            foreach(executable Videx videx_image_checks videx_ui_checks)
+            foreach(executable Videx videx_image_checks videx_ui_checks videx_playback_checks videx_playback_lifecycle_checks)
                 if(TARGET ${executable})
                     add_custom_command(TARGET ${executable} POST_BUILD
                         COMMAND ${CMAKE_COMMAND} -E copy_if_different

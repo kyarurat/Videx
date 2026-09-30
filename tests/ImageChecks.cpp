@@ -124,6 +124,8 @@ int main(int argc, char** argv)
         check(result.status == ImageResult::Status::Ready && !result.image.isNull(), qPrintable("real " + extension + " decode"));
         qInfo() << extension << result.image.size() << result.message;
     }
+#else
+    qInfo() << "SKIP: HEIC/AVIF real-file checks require libheif source fixtures (system-library build).";
 #endif
     const auto renamed = directory.filePath("no-extension");
     check(QFile::copy(png, renamed), "copy extensionless image");
@@ -211,6 +213,56 @@ int main(int argc, char** argv)
     const auto largeJpg = directory.filePath("large.jpg");
     const auto largePng = directory.filePath("large.png");
     check(large.save(largeJpg) && large.save(largePng), "large JPG and PNG fixtures");
+    {
+        const auto token = std::make_shared<std::atomic_bool>(false);
+        const auto preview = ImageDecoder::decode(largeJpg, token, false, QSize(640, 480));
+        check(preview.status == ImageResult::Status::Ready && preview.image.size() == QSize(640, 480)
+              && preview.sourceSize == large.size() && !preview.fullResolution, "JPEG scaled decode retains oriented source extent");
+        check(preview.image.format() == QImage::Format_RGB32, "display pixel conversion runs in decoder");
+        const auto orientedPreview = ImageDecoder::decode(photo, token, false, QSize(60, 90));
+        check(orientedPreview.sourceSize == QSize(120, 180) && orientedPreview.image.size() == QSize(60, 90),
+              "scaled decoding preserves orientation and preview aspect ratio");
+        ImageLoader progressive;
+        ImageResult visible;
+        QObject::connect(&progressive, &ImageLoader::loaded, &app, [&](const ImageResult& result) { visible = result; });
+        progressive.open(largeJpg, false, QSize(640, 480));
+        check(waitFor([&] { return visible.status == ImageResult::Status::Ready; }) && !visible.fullResolution,
+              "first progressive load delivers only preview pixels");
+        progressive.prefetch({largePng});
+        check(waitFor([&] { return progressive.isCached(largePng); }), "neighbors cache preview pixels");
+        progressive.open(largePng, false, QSize(640, 480));
+        check(visible.image.size() == QSize(640, 480) && !visible.fullResolution, "neighbor preview is reused immediately");
+        progressive.requestOriginal();
+        check(waitFor([&] { return visible.fullResolution; }) && visible.image.size() == large.size(),
+              "actual size request promotes current preview to original");
+        progressive.open(largeJpg, false, QSize(640, 480));
+        progressive.requestOriginal();
+        progressive.open(png, false, QSize(640, 480));
+        check(waitFor([&] { return visible.sourceSize == fixture.size(); }), "stale original cannot replace newly opened preview");
+
+        ImageView progressiveView;
+        progressiveView.resize(640, 480);
+        progressiveView.show();
+        int originalRequests = 0;
+        QObject::connect(&progressiveView, &ImageView::originalRequested, &app, [&] { ++originalRequests; });
+        progressiveView.setImage(preview.image, preview.sourceSize);
+        progressiveView.actualSize();
+        progressiveView.zoom(1.5);
+        check(originalRequests > 0, "preview actual-size and zoom request original pixels");
+        progressiveView.centerOn(1700, 1300);
+        const auto center = progressiveView.mapToScene(progressiveView.viewport()->rect().center());
+        const auto transform = progressiveView.transform();
+        progressiveView.setImage(large, large.size(), true);
+        check(progressiveView.transform() == transform && QLineF(center,
+              progressiveView.mapToScene(progressiveView.viewport()->rect().center())).length() < 2,
+              "original replaces preview without losing zoom or pan");
+        const int requestsBeforeOriginalZoom = originalRequests;
+        progressiveView.zoom(1.2);
+        progressiveView.actualSize();
+        progressiveView.zoom(2.0);
+        check(originalRequests == requestsBeforeOriginalZoom,
+              "zooming original above 100 percent does not request another load");
+    }
     preload.prefetch({largeJpg, largePng});
     check(waitFor([&] { return preload.isCached(largeJpg) && preload.isCached(largePng); }), "preload large JPG and PNG");
     check(visibleLoads == 0, "background preload never changes the visible image");
@@ -325,6 +377,21 @@ int main(int argc, char** argv)
     }
 
     ImagePane pane;
+    {
+        std::atomic_int reads{0};
+        ImageLoader metadataCache(nullptr, {}, [&](const QString&) {
+            ++reads;
+            return QList<ImageMetadataEntry>{{"cached", "value"}};
+        });
+        int metadataResults = 0;
+        QObject::connect(&metadataCache, &ImageLoader::metadataLoaded, &app, [&](const auto&) { ++metadataResults; });
+        metadataCache.open(png);
+        check(waitFor([&] { return metadataResults == 1; }), "metadata cache initially reads the file");
+        metadataCache.open(png);
+        check(metadataResults == 2 && reads == 1, "revisiting unchanged image reuses photographic metadata");
+        metadataCache.open(png, true);
+        check(waitFor([&] { return metadataResults == 3; }) && reads == 2, "forced reload invalidates metadata together with pixels");
+    }
     pane.resize(900,600);
     pane.show();
     pane.open(photo);
@@ -421,21 +488,31 @@ int main(int argc, char** argv)
     for (const auto* name : {"1.png", "2.png", "10.png"})
         check(fixture.save(navigationDirectory + '/' + name), "navigation image fixture");
     writeFile(navigationDirectory + "/3.txt", "unsupported");
+    auto* windowLoader = window.findChild<ImageLoader*>();
+    auto* selectedName = window.findChild<QLabel*>("selectedFileName");
+    QList<qint64> middleImageKeys;
+    const auto imageConnection = QObject::connect(windowLoader, &ImageLoader::loaded, &window,
+        [&](const ImageResult& result) {
+            if (selectedName->text() == "2.png" && result.status == ImageResult::Status::Ready)
+                middleImageKeys.append(result.image.cacheKey());
+        });
     window.openPath(navigationDirectory + "/2.png");
     auto* tree = window.findChild<QTreeView*>();
     check(waitFor([&] { return windowDetails->isVisible() && tree->model()->rowCount(tree->rootIndex()) == 4; }), "navigation directory loaded");
-    auto* windowLoader = window.findChild<ImageLoader*>();
     check(waitFor([&] { return windowLoader->isCached(navigationDirectory + "/10.png")
         && windowLoader->isCached(navigationDirectory + "/1.png"); }), "browser preloads both neighbors in tree order");
     auto* next = window.findChild<QPushButton*>("nextImageButton");
     auto* previous = window.findChild<QPushButton*>("previousImageButton");
-    auto* selectedName = window.findChild<QLabel*>("selectedFileName");
     next->click();
     check(waitFor([&] { return selectedName->text() == "10.png" && windowDetails->isVisible(); }), "next image follows natural tree order and skips text");
+    check(windowLoader->isCached(navigationDirectory + "/1.png"), "image navigation retains the other preloaded neighbor");
     next->click();
     check(selectedName->text() == "10.png", "last image does not wrap");
     previous->click();
     check(waitFor([&] { return selectedName->text() == "2.png" && windowDetails->isVisible(); }), "previous image follows tree order");
+    check(middleImageKeys.size() == 2 && middleImageKeys.first() == middleImageKeys.last(),
+          "main window navigation reuses decoded image data instead of decoding again");
+    QObject::disconnect(imageConnection);
     window.activateWindow();
     auto* keyboardView = window.findChild<ImageView*>();
     keyboardView->setFocus();

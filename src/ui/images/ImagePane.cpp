@@ -56,6 +56,16 @@ ImagePane::ImagePane(QWidget* parent) : QWidget(parent), m_loader(new ImageLoade
     m_loading = new QLabel(tr("正在加载图片…"), canvas);
     m_loading->setAlignment(Qt::AlignCenter);
     m_loading->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_originalTimer = new QTimer(this);
+    m_originalTimer->setSingleShot(true);
+    m_originalTimer->setInterval(750);
+    connect(m_originalTimer, &QTimer::timeout, this, [this] { m_loader->requestOriginal(true); });
+    connect(m_view, &ImageView::originalRequested, this, [this] {
+        m_originalTimer->stop();
+        m_loading->setText(tr("正在加载原图…"));
+        m_loading->show();
+        m_loader->requestOriginal();
+    });
     canvasLayout->addWidget(m_loading);
     layout->addWidget(canvas, 1);
     connect(fit, &QPushButton::clicked, m_view, &ImageView::fitImage);
@@ -74,16 +84,29 @@ ImagePane::ImagePane(QWidget* parent) : QWidget(parent), m_loader(new ImageLoade
         m_scale->setText(tr("%1%").arg(qRound(scale * 100)));
     });
     connect(m_loader, &ImageLoader::loaded, this, [this](const ImageResult& result) {
+        const bool upgrade = m_result.status == ImageResult::Status::Ready;
+        if (upgrade && result.status != ImageResult::Status::Ready) {
+            m_loading->setText(result.message);
+            m_loading->show();
+            const auto generation = m_viewGeneration;
+            QTimer::singleShot(3000, this, [this, generation] {
+                if (generation == m_viewGeneration) m_loading->hide();
+            });
+            return;
+        }
+        const auto metadata = m_result.metadata;
         m_result = result;
-        m_metadataPending = result.status == ImageResult::Status::Ready;
+        if (upgrade) m_result.metadata = metadata;
+        else m_metadataPending = result.status == ImageResult::Status::Ready;
         if (result.status != ImageResult::Status::Ready) {
-            emit failed(result.message.isEmpty() ? tr("格式不支持") : result.message);
+            if (!upgrade) emit failed(result.message.isEmpty() ? tr("格式不支持") : result.message);
             return;
         }
         m_loading->hide();
         m_view->show();
         m_toolbar->show();
-        m_view->setImage(result.image);
+        m_view->setImage(result.image, result.sourceSize, upgrade);
+        if (!result.fullResolution && !upgrade) m_originalTimer->start();
         // The view owns its display data; release the additional decoded image.
         m_result.image = {};
     });
@@ -105,6 +128,8 @@ void ImagePane::clear()
 
 void ImagePane::resetView()
 {
+    ++m_viewGeneration;
+    m_originalTimer->stop();
     if (m_details) m_details->close();
     m_path.clear();
     m_result = {};
@@ -112,6 +137,7 @@ void ImagePane::resetView()
     m_view->clearImage();
     m_toolbar->hide();
     m_loading->show();
+    m_loading->setText(tr("正在加载图片…"));
     m_loading->raise();
 }
 
@@ -119,7 +145,9 @@ void ImagePane::open(const QString& path, bool reload)
 {
     resetView();
     m_path = path;
-    m_loader->open(path, reload);
+    const auto pixels = m_view->viewport()->size() * m_view->devicePixelRatioF();
+    // Bound speculative pixels even on very large desktop layouts.
+    m_loader->open(path, reload, pixels.boundedTo(QSize(3840, 2160)).expandedTo(QSize(64, 64)));
 }
 
 void ImagePane::prefetch(const QStringList& paths) { m_loader->prefetch(paths); }

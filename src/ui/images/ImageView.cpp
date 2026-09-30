@@ -17,17 +17,24 @@ ImageView::ImageView(QWidget* parent) : QGraphicsView(parent)
     m_pixelRatio = devicePixelRatioF();
 }
 
-void ImageView::setImage(const QImage& image)
+void ImageView::setImage(const QImage& image, QSize sourceSize, bool preserveView)
 {
-    clearImage();
+    const auto center = mapToScene(viewport()->rect().center());
+    if (!preserveView || !m_item) clearImage();
     auto pixmap = QPixmap::fromImage(image);
     // Treat media dimensions as source pixels, including files named @2x.
     // Screen scaling is handled by the view's actual-size/zoom transforms.
     pixmap.setDevicePixelRatio(1.0);
-    m_item = scene()->addPixmap(pixmap);
+    if (!m_item) m_item = scene()->addPixmap(pixmap);
+    else m_item->setPixmap(pixmap);
+    if (!sourceSize.isValid()) sourceSize = image.size();
+    m_previewScale = std::min(double(image.width()) / sourceSize.width(), double(image.height()) / sourceSize.height());
+    m_item->setTransform(QTransform::fromScale(double(sourceSize.width()) / image.width(),
+                                              double(sourceSize.height()) / image.height()));
     m_item->setTransformationMode(Qt::SmoothTransformation);
-    scene()->setSceneRect(m_item->boundingRect());
-    fitImage();
+    scene()->setSceneRect(m_item->sceneBoundingRect());
+    if (m_fit) fitImage();
+    else centerOn(center);
 }
 
 void ImageView::clearImage()
@@ -61,6 +68,7 @@ void ImageView::actualSize()
     scale(1.0 / devicePixelRatioF(), 1.0 / devicePixelRatioF());
     if (m_item) centerOn(m_item);
     emit scaleChanged(1.0);
+    if (m_item && m_previewScale < 1.0) emit originalRequested();
 }
 
 void ImageView::zoom(double factor)
@@ -72,6 +80,7 @@ void ImageView::zoom(double factor)
     const double newScale = std::clamp(oldScale * factor, 0.01 / devicePixelRatioF(), 32.0 / devicePixelRatioF());
     scale(newScale / oldScale, newScale / oldScale);
     emit scaleChanged(newScale * devicePixelRatioF());
+    if (m_previewScale < 1.0 && newScale * devicePixelRatioF() > m_previewScale) emit originalRequested();
 }
 
 void ImageView::resizeEvent(QResizeEvent* event)

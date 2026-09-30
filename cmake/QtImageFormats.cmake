@@ -24,7 +24,7 @@ if(VIDEX_BUILD_IMAGE_PLUGINS)
             "-DCMAKE_INSTALL_PREFIX=${VIDEX_IMAGE_PLUGIN_PREFIX}"
             -DQT_BUILD_TESTS=OFF -DQT_BUILD_EXAMPLES=OFF
         INSTALL_COMMAND "${CMAKE_COMMAND}" --install <BINARY_DIR> --config Release)
-    foreach(executable Videx videx_image_checks videx_ui_checks)
+    foreach(executable Videx videx_image_checks videx_ui_checks videx_playback_checks)
         if(TARGET ${executable})
             add_dependencies(${executable} videx_image_plugins)
             add_custom_command(TARGET ${executable} POST_BUILD

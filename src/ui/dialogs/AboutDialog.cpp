@@ -17,9 +17,9 @@ AboutDialog::AboutDialog(QWidget* parent) : QDialog(parent)
     repository->setTextInteractionFlags(Qt::TextBrowserInteraction);
     repository->setOpenExternalLinks(true);
     layout->addWidget(repository);
-    auto* description = new QLabel(tr("轻量的本地媒体查看器。\n浏览图片，查看相机 RAW 与拍摄信息。"),this);
+    auto* description = new QLabel(tr("轻量的本地媒体查看器。\n浏览图片、播放视频与音频，查看相机 RAW 与拍摄信息。"),this);
     description->setWordWrap(true); layout->addWidget(description);
-    auto* technology = new QLabel(tr("使用 C++20 与 Qt 6 Widgets 构建。\n播放引擎计划使用 libmpv，当前尚未接入。"),this);
+    auto* technology = new QLabel(tr("使用 C++20 与 Qt 6 Widgets 构建。\n音视频播放由 libmpv 提供。"),this);
     technology->setProperty("role","muted"); technology->setWordWrap(true); layout->addWidget(technology);
     layout->addStretch(); auto* close = new QPushButton(tr("关闭"),this); close->setDefault(true);
     connect(close,&QPushButton::clicked,this,&QDialog::accept); layout->addWidget(close,0,Qt::AlignRight);

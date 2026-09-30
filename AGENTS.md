@@ -6,9 +6,9 @@
 
 **Product positioning:** Videx is a lightweight local media browser and viewer for video, audio, and images. Browsing courses is one possible use case, not the product identity. Product copy should describe general local media browsing, viewing, and playback.
 
-Videx is a native, cross-platform desktop application built with **C++20** and **Qt 6 Widgets**. Image viewing uses Qt image APIs, LibRaw, and libheif; Exiv2 reads photographic metadata. The planned video/audio backend is **libmpv**.
+Videx is a native, cross-platform desktop application built with **C++20** and **Qt 6 Widgets**. Image viewing uses Qt image APIs, LibRaw, and libheif; Exiv2 reads photographic metadata. The video/audio backend is **libmpv**.
 
-**Implementation status:** The application supports directory browsing, persisted preferences, still-image viewing (including SVG, HEIC/AVIF and LibRaw-supported camera RAW), viewing controls, and image details with EXIF/IPTC/XMP and GPS when present. Unsupported formats show a clear message in the right-hand viewer. Video/audio playback and libmpv integration remain unimplemented. See `docs/image-viewer.md` for verified scope and limitations; do not claim every camera, compression variant, animation, or multi-page format is supported.
+**Implementation status:** The application supports directory browsing, persisted preferences, still-image viewing (including SVG, HEIC/AVIF and LibRaw-supported camera RAW), viewing controls, and image details with EXIF/IPTC/XMP and GPS when present. Basic video/audio playback uses libmpv with a Qt OpenGL widget for video, shared controls, scoped shortcuts, same-category navigation, and optional auto-next. Playback position restoration is deferred. Unsupported formats show a clear message in the right-hand viewer. See `docs/image-viewer.md` and `docs/playback.md` for scope and limitations; do not claim every codec, camera, compression variant, animation, or multi-page format is supported.
 
 The application provides a VS Code-style desktop layout:
 
@@ -484,6 +484,8 @@ Do not capture shortcuts globally unless required.
 
 Preserve native file-tree and input-widget keyboard navigation. Playback shortcuts must not steal arrow keys or Space from focused controls. Image navigation and zoom shortcuts should be scoped to the image viewer and documented when implemented.
 
+Explicit user-requested exception: while seekable video/audio is loaded and a file row is selected, the explorer's unmodified Left/Right keys control playback. A short press seeks 5 seconds; held Right temporarily plays at 2× and restores the previous rate on release; held Left steps backward 1 second. Folder rows keep native expand/collapse, and other focused input controls keep their own keys. Cancel held playback actions on focus loss or when seeking becomes disabled.
+
 ---
 
 ## 12. Playback History
@@ -936,7 +938,7 @@ LibRaw
 Exiv2
 libheif (libde265 / libaom)
 zlib
-libmpv (planned)
+libmpv
 ```
 
 Do not add a library merely to implement functionality already provided cleanly by Qt or the C++ standard library.

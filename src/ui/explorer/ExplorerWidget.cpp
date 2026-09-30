@@ -2,6 +2,7 @@
 #include "ui/common/UiComponents.h"
 #include <QFileSystemModel>
 #include "media/ImageDecoder.h"
+#include "media/MediaType.h"
 
 #include <QTreeView>
 #include <QStackedWidget>
@@ -14,12 +15,18 @@
 #include <QKeyEvent>
 #include <QCoreApplication>
 #include <QScopedValueRollback>
+#include <QPersistentModelIndex>
+#include <QPointer>
+#include <QTimer>
 
 ExplorerWidget::ExplorerWidget(ThemeManager* theme, QWidget* parent) : QWidget(parent)
 {
     setObjectName("explorer");
     setAttribute(Qt::WA_StyledBackground);
     setMinimumWidth(200);
+    m_contentsTimer = new QTimer(this);
+    m_contentsTimer->setSingleShot(true);
+    connect(m_contentsTimer, &QTimer::timeout, this, &ExplorerWidget::contentsReady);
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0,0,0,0); layout->setSpacing(0);
     auto* header = new QHBoxLayout;
@@ -68,10 +75,41 @@ ExplorerWidget::ExplorerWidget(ThemeManager* theme, QWidget* parent) : QWidget(p
     layout->addWidget(m_hint);
 }
 ExplorerWidget::~ExplorerWidget() { clearDirectory(); }
+void ExplorerWidget::setPlaybackSeekingEnabled(bool enabled)
+{
+    m_playbackSeekingEnabled = enabled;
+    if (!enabled && !m_playbackSeekKeys.isEmpty()) {
+        m_playbackSeekKeys.clear();
+        emit playbackSeekCancelled();
+    }
+}
 bool ExplorerWidget::eventFilter(QObject* watched, QEvent* event)
 {
+    if (watched == m_tree && event->type() == QEvent::FocusOut) {
+        m_playbackSeekKeys.clear();
+        emit playbackSeekCancelled();
+    }
+    if (watched == m_tree && event->type() == QEvent::KeyRelease) {
+        const auto* key = static_cast<QKeyEvent*>(event);
+        if (m_playbackSeekKeys.contains(key->key())) {
+            if (!key->isAutoRepeat()) m_playbackSeekKeys.remove(key->key());
+            emit playbackSeekRequested(key->key() == Qt::Key_Right ? 1 : -1, false, key->isAutoRepeat());
+            return true;
+        }
+    }
     if (watched == m_tree && event->type() == QEvent::KeyPress) {
         const auto* key = static_cast<QKeyEvent*>(event);
+        if (m_playbackSeekingEnabled && key->modifiers() == Qt::NoModifier
+            && (key->key() == Qt::Key_Left || key->key() == Qt::Key_Right)) {
+            const auto index = m_tree->currentIndex();
+            // Folder selection keeps the tree's native expand/collapse keys.
+            if (m_model && index.isValid() && !m_model->isDir(index)) {
+                m_playbackSeekKeys.insert(key->key());
+                emit playbackSeekRequested(key->key() == Qt::Key_Right ? 1 : -1, true, key->isAutoRepeat());
+                event->accept();
+                return true;
+            }
+        }
         if (!m_forwardingNavigation && (key->key() == Qt::Key_Up || key->key() == Qt::Key_Down)
             && key->modifiers() == Qt::NoModifier) {
             const auto previous = m_tree->currentIndex();
@@ -98,6 +136,7 @@ bool ExplorerWidget::eventFilter(QObject* watched, QEvent* event)
 }
 void ExplorerWidget::clearDirectory()
 {
+    m_contentsTimer->stop();
     auto* selection = m_tree->selectionModel();
     if (selection) disconnect(selection, nullptr, this, nullptr);
     m_tree->setModel(nullptr);
@@ -115,6 +154,7 @@ void ExplorerWidget::clearDirectory()
 }
 void ExplorerWidget::setDirectory(const QString& path)
 {
+    if (m_model && QDir::cleanPath(path) == QDir::cleanPath(m_directory)) return;
     clearDirectory();
     m_directory = path;
     m_rootLabel->setText(QDir(path).dirName().isEmpty() ? QDir::toNativeSeparators(path) : QDir(path).dirName());
@@ -122,6 +162,7 @@ void ExplorerWidget::setDirectory(const QString& path)
     m_rootLabel->show();
     m_model = new QFileSystemModel(this);
     m_model->setReadOnly(true);
+    m_model->setOption(QFileSystemModel::DontUseCustomDirectoryIcons);
     m_model->setFilter(QDir::AllDirs | QDir::Files | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot);
     m_tree->setModel(m_model);
     for (int column=1; column<4; ++column) m_tree->hideColumn(column);
@@ -141,8 +182,11 @@ void ExplorerWidget::setDirectory(const QString& path)
                 m_pendingHighlight.clear();
             }
         }
-        emit contentsReady();
+        m_contentsTimer->start();
     });
+    // QFileSystemModel may sort after directoryLoaded. Refresh neighbors once
+    // that layout is committed, coalescing signals instead of forcing a sort.
+    connect(m_model, &QAbstractItemModel::layoutChanged, this, [this] { m_contentsTimer->start(); });
     connect(m_model, &QAbstractItemModel::rowsInserted, this, updateHint);
     connect(m_model, &QAbstractItemModel::rowsRemoved, this, updateHint);
     m_tree->setRootIndex(m_model->setRootPath(path));
@@ -161,43 +205,50 @@ void ExplorerWidget::highlightFile(const QString& path)
     m_tree->scrollTo(index);
 }
 
-void ExplorerWidget::navigateImage(const QString& currentPath, int direction)
-{
-    if (!m_model || currentPath.isEmpty() || direction == 0) return;
-    // index(path) can insert the opened file before the asynchronous directory
-    // listing arrives. Flush the pending sort before interpreting row order.
-    m_model->sort(m_tree->header()->sortIndicatorSection(), m_tree->header()->sortIndicatorOrder());
-    const auto current = m_model->index(currentPath);
-    if (!current.isValid()) return;
-    const auto parent = current.parent();
-    const int step = direction > 0 ? 1 : -1;
-    for (int row = current.row() + step; row >= 0 && row < m_model->rowCount(parent); row += step) {
-        const auto index = m_model->index(row, 0, parent);
-        const auto path = m_model->filePath(index);
-        if (!m_model->isDir(index) && ImageDecoder::isImageCandidate(path)) {
-            emit fileOpenRequested(path);
-            return;
-        }
-    }
-}
-
 QStringList ExplorerWidget::adjacentImages(const QString& currentPath)
 {
     QStringList paths;
     if (!m_model || currentPath.isEmpty() || !ImageDecoder::isImageCandidate(currentPath)) return paths;
-    m_model->sort(m_tree->header()->sortIndicatorSection(), m_tree->header()->sortIndicatorOrder());
     const auto current = m_model->index(currentPath);
     if (!current.isValid()) return paths;
     const auto parent = current.parent();
-    const auto extensions = ImageDecoder::supportedExtensions();
     for (const int step : {1, -1}) {
-        for (int row = current.row() + step; row >= 0 && row < m_model->rowCount(parent); row += step) {
+        int examined = 0;
+        // Prefetch is optional: do not walk an entire huge mixed directory.
+        for (int row = current.row() + step; row >= 0 && row < m_model->rowCount(parent) && examined++ < 128; row += step) {
             const auto index = m_model->index(row, 0, parent);
-            if (!m_model->isDir(index) && extensions.contains(m_model->fileInfo(index).suffix().toLower())) {
+            if (!m_model->isDir(index) && ImageDecoder::isImageCandidate(m_model->fileName(index))) {
                 paths.append(m_model->filePath(index));
                 break;
             }
         }
     }
     return paths;
+}
+
+MediaNavigation::CandidateSource ExplorerWidget::navigationSource(const QString& currentPath, int direction, MediaType category)
+{
+    if (!m_model || currentPath.isEmpty() || !direction) return {};
+    return [model = QPointer<QFileSystemModel>(m_model), current = QPersistentModelIndex{}, currentPath,
+            initialized = false, step = direction > 0 ? 1 : -1,
+            category]() mutable -> std::optional<QString> {
+        if (!model) return std::nullopt;
+        // Initialize after Qt's queued directory population/sort notifications.
+        // Forcing sort() here re-sorts all 100000 rows on every navigation.
+        if (!initialized) { initialized = true; current = model->index(currentPath); }
+        if (!current.isValid()) return std::nullopt;
+        // Follow the persistent cursor, so inserted/removed rows do not leave
+        // a stale integer offset. Return to the event loop every 128 rows.
+        for (int examined = 0; examined < 128; ++examined) {
+            const auto parent = current.parent();
+            const int row = current.row() + step;
+            if (row < 0 || row >= model->rowCount(parent)) return std::nullopt;
+            current = model->index(row, 0, parent);
+            if (model->isDir(current)) continue;
+            const auto type = classifyMedia(model->fileName(current));
+            if (category == MediaType::Image ? type == category : type == MediaType::Audio || type == MediaType::Video)
+                return model->filePath(current);
+        }
+        return QString{};
+    };
 }

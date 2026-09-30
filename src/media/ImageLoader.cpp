@@ -4,9 +4,7 @@
 
 ImageLoader::ImageLoader(QObject* parent, Decode decode, ReadMetadata metadata)
     : QObject(parent),
-      m_decode(decode ? std::move(decode) : Decode{[](const QString& path, const auto& token) {
-          return ImageDecoder::decode(path, token, false);
-      }}),
+      m_decode(std::move(decode)),
       m_readMetadata(metadata ? std::move(metadata) : ReadMetadata{ImageDecoder::photographicMetadata})
 {
     // One reserved foreground slot and at most one speculative decode.
@@ -41,16 +39,23 @@ void ImageLoader::finish(Job& job)
         const auto* priority = m_cache.object(m_prefetchPriority);
         const bool protectNext = job.path != m_requested && job.path != m_prefetchPriority
             && priority && cost + priority->cost > m_cache.maxCost();
-        if (cost <= m_cache.maxCost() && !protectNext)
+        const auto* existing = m_cache.object(job.path);
+        if (cost <= m_cache.maxCost() && !protectNext && (!existing || !existing->result.fullResolution || result.fullResolution))
             m_cache.insert(job.path, new CachedImage{result, job.size, job.modified, int(cost)}, int(cost));
     }
-    if (!cancelled && m_waiting && m_requested == job.path) {
+    if (!cancelled && m_requested == job.path && (m_waiting || m_originalRequested)) {
         // Missing files can deliver their error. Changed files must be decoded
         // again, including a preload promoted after an external replacement.
         if (unchanged || !info.isFile()) {
             if (unchanged || result.status != ImageResult::Status::Ready) {
-                m_waiting = false;
-                deliver(result);
+                if (m_waiting || job.targetSize.isEmpty()) {
+                    m_waiting = false;
+                    if (job.targetSize.isEmpty()) m_originalRequested = false;
+                    // An optional original failing must leave its preview usable.
+                    if (!m_originalSpeculative || result.status == ImageResult::Status::Ready)
+                        deliver(result);
+                    m_originalSpeculative = false;
+                }
             }
         }
     }
@@ -65,7 +70,11 @@ void ImageLoader::clear()
     m_prefetchPriority.clear();
     m_waiting = false;
     m_metadataPending = false;
+    m_originalRequested = false;
+    m_currentSourceSize = {};
+    m_currentFullResolution = false;
     m_cache.clear();
+    m_metadataCache.clear();
     for (auto* job : {&m_foreground, &m_background})
         if (job->cancelled) job->cancelled->store(true);
 }
@@ -85,15 +94,21 @@ ImageLoader::CachedImage* ImageLoader::cached(const QString& path)
 
 bool ImageLoader::isCached(const QString& path) { return cached(path) != nullptr; }
 
-void ImageLoader::open(const QString& path, bool reload)
+void ImageLoader::open(const QString& path, bool reload, QSize previewSize)
 {
     ++m_generation;
     m_metadataPending = false;
+    m_metadataDelivered = false;
+    m_originalRequested = false;
+    m_originalSpeculative = false;
+    m_previewSize = previewSize;
+    m_currentSourceSize = {};
+    m_currentFullResolution = false;
     m_requested = path;
     m_waiting = !path.isEmpty();
     m_prefetch.clear();
     m_prefetchPriority.clear();
-    if (reload) m_cache.remove(path);
+    if (reload) { m_cache.remove(path); m_metadataCache.remove(path); }
     for (auto* job : {&m_foreground, &m_background}) {
         if (job->running && (job->path != path || reload)) job->cancelled->store(true);
     }
@@ -102,6 +117,18 @@ void ImageLoader::open(const QString& path, bool reload)
         m_waiting = false;
         deliver(result);
     }
+    startPending();
+}
+
+void ImageLoader::requestOriginal(bool speculative)
+{
+    if (m_requested.isEmpty() || !m_currentSourceSize.isValid() || m_currentFullResolution) return;
+    if (const auto* entry = cached(m_requested); entry && entry->result.fullResolution) return;
+    // Reserve half the cache for neighbors. Never speculatively allocate an
+    // original too large to retain; explicit actual-size requests can still do so.
+    if (speculative && qint64(m_currentSourceSize.width()) * m_currentSourceSize.height() * 4 > 128LL * 1024 * 1024) return;
+    m_originalRequested = true;
+    m_originalSpeculative = speculative;
     startPending();
 }
 
@@ -121,27 +148,37 @@ void ImageLoader::startPending()
         // background task that a decoder cannot interrupt.
         for (auto* job : {&m_foreground, &m_background})
             if (job->running && job->path == m_requested && !job->cancelled->load()) return;
-        if (!m_foreground.running) start(m_foreground, m_requested);
+        if (!m_foreground.running) start(m_foreground, m_requested, m_previewSize);
+        else if (!m_background.running) start(m_background, m_requested, m_previewSize);
+        return;
+    }
+    if (m_originalRequested) {
+        for (auto* job : {&m_foreground, &m_background})
+            if (job->running && job->path == m_requested && job->targetSize.isEmpty() && !job->cancelled->load()) return;
+        if (!m_originalSpeculative && m_background.running && m_background.path != m_requested)
+            m_background.cancelled->store(true);
+        if (!m_foreground.running) start(m_foreground, m_requested, {});
         return;
     }
     // Do not add speculative work while cancelled foreground work drains.
     if (m_foreground.running || m_background.running) return;
     while (!m_prefetch.isEmpty()) {
         const auto path = m_prefetch.takeFirst();
-        if (!cached(path)) { start(m_background, path); break; }
+        if (!cached(path)) { start(m_background, path, m_previewSize); break; }
     }
 }
 
-void ImageLoader::start(Job& job, const QString& path)
+void ImageLoader::start(Job& job, const QString& path, QSize targetSize)
 {
     const QFileInfo info(path);
     job.path = path;
     job.size = info.size();
     job.modified = info.lastModified();
     job.running = true;
+    job.targetSize = targetSize;
     job.cancelled = std::make_shared<std::atomic_bool>(false);
-    job.watcher.setFuture(QtConcurrent::run(&m_pool, [path, token = job.cancelled, decode = m_decode] {
-        try { return decode(path, token); }
+    job.watcher.setFuture(QtConcurrent::run(&m_pool, [path, targetSize, token = job.cancelled, decode = m_decode] {
+        try { return decode ? decode(path, token) : ImageDecoder::decode(path, token, false, targetSize); }
         catch (const std::exception&) {
             ImageResult result;
             result.status = ImageResult::Status::Failed;
@@ -154,8 +191,22 @@ void ImageLoader::start(Job& job, const QString& path)
 void ImageLoader::deliver(const ImageResult& result)
 {
     const auto generation = m_generation;
+    if (result.status == ImageResult::Status::Ready) {
+        m_currentSourceSize = result.sourceSize.isValid() ? result.sourceSize : result.originalSize;
+        m_currentFullResolution = result.fullResolution;
+    }
     emit loaded(result);
     if (generation != m_generation || result.status != ImageResult::Status::Ready) return;
+    if (m_metadataDelivered) return;
+    m_metadataDelivered = true;
+    if (const auto* entry = m_metadataCache.object(m_requested)) {
+        const QFileInfo current(m_requested);
+        if (current.size() == entry->size && current.lastModified() == entry->modified) {
+            emit metadataLoaded(entry->entries);
+            return;
+        }
+        m_metadataCache.remove(m_requested);
+    }
     m_metadataPending = true;
     startMetadata();
 }
@@ -179,8 +230,14 @@ void ImageLoader::startMetadata()
         m_metadataRunning = false;
         const QFileInfo current(path);
         if (generation == m_generation && current.isFile()
-            && current.size() == size && current.lastModified() == modified)
+            && current.size() == size && current.lastModified() == modified) {
+            qint64 bytes = 0;
+            for (const auto& entry : entries) bytes += sizeof(ImageMetadataEntry) + (entry.name.size() + entry.value.size()) * 2;
+            const qint64 cost = (bytes + 1023) / 1024 + 1;
+            if (cost <= m_metadataCache.maxCost())
+                m_metadataCache.insert(path, new CachedMetadata{entries, size, modified}, int(cost));
             emit metadataLoaded(entries);
+        }
         startMetadata();
     });
     m_metadataWatcher.setFuture(QtConcurrent::run(&m_metadataPool, [path, read = m_readMetadata] {

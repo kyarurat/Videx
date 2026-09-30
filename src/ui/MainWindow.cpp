@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 #include "app/ThemeManager.h"
 #include "app/BrowserController.h"
+#include "media/MediaNavigation.h"
 #include "services/SettingsService.h"
 #include "ui/explorer/ExplorerWidget.h"
 #include "ui/player/PlayerWidget.h"
@@ -18,6 +19,7 @@
 #include <QStandardPaths>
 #include <QShortcut>
 #include <QEvent>
+#include <QCloseEvent>
 #include <QScopedValueRollback>
 
 MainWindow::MainWindow(ThemeManager* theme, SettingsService* settings, QWidget* parent)
@@ -28,39 +30,61 @@ MainWindow::MainWindow(ThemeManager* theme, SettingsService* settings, QWidget* 
     m_settings = settings->loadPreferences();
     m_theme->setMode(m_settings.theme);
     m_browser = new BrowserController(settings, this);
+    m_mediaNavigation = new MediaNavigation(this);
     auto* central = new QWidget(this);
     auto* layout = new QVBoxLayout(central);
     layout->setContentsMargins(0,0,0,0); layout->setSpacing(0);
-    auto* splitter = new QSplitter(Qt::Horizontal,central);
-    splitter->setChildrenCollapsible(false); splitter->setHandleWidth(1);
-    m_explorer = new ExplorerWidget(theme,splitter);
-    m_player = new PlayerWidget(theme,splitter);
-    splitter->addWidget(m_explorer); splitter->addWidget(m_player);
-    splitter->setStretchFactor(0,0); splitter->setStretchFactor(1,1);
-    splitter->setSizes({260,940}); layout->addWidget(splitter,1);
+    m_splitter = new QSplitter(Qt::Horizontal,central);
+    m_splitter->setChildrenCollapsible(false); m_splitter->setHandleWidth(1);
+    m_explorer = new ExplorerWidget(theme,m_splitter);
+    m_player = new PlayerWidget(theme,m_splitter);
+    m_player->applyPlaybackPreferences(m_settings.defaultRate, m_settings.autoPlayNext);
+    m_splitter->addWidget(m_explorer); m_splitter->addWidget(m_player);
+    m_splitter->setStretchFactor(0,0); m_splitter->setStretchFactor(1,1);
+    m_splitter->setSizes({260,940}); layout->addWidget(m_splitter,1);
     setCentralWidget(central);
     m_status = new QLabel(tr("就绪 · 请选择文件或文件夹"),this);
     m_status->setTextFormat(Qt::PlainText);
     m_status->setMinimumWidth(0);
     m_status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    m_modeLabel = new QLabel(tr("图片查看 · 音视频尚未接入"),this);
+    m_modeLabel = new QLabel(tr("图片 · 视频 · 音频"),this);
     statusBar()->setSizeGripEnabled(true);
     statusBar()->addWidget(m_status,1); statusBar()->addPermanentWidget(m_modeLabel);
+    const auto geometry = settings->windowGeometry();
+    if (!geometry.isEmpty()) {
+        restoreGeometry(geometry);
+        setWindowState(windowState() & ~(Qt::WindowFullScreen | Qt::WindowMinimized));
+    }
+    const auto splitterState = settings->splitterState();
+    if (!splitterState.isEmpty()) m_splitter->restoreState(splitterState);
+    m_visibleSplitterState = m_splitter->saveState();
     createMenus();
     m_explorerAction->setChecked(m_settings.explorerVisible);
     m_statusAction->setChecked(m_settings.statusBarVisible);
     connect(m_explorer,&ExplorerWidget::openRequested,this,&MainWindow::choosePath);
     connect(m_player,&PlayerWidget::openRequested,this,&MainWindow::choosePath);
     connect(m_explorer,&ExplorerWidget::fileOpenRequested,m_browser,&BrowserController::selectFile);
+    connect(m_explorer, &ExplorerWidget::playbackSeekRequested, m_player, &PlayerWidget::handleSeekKey);
+    connect(m_explorer, &ExplorerWidget::playbackSeekCancelled, m_player, &PlayerWidget::cancelSeekHold);
+    connect(m_player, &PlayerWidget::playbackSeekingEnabledChanged, m_explorer, &ExplorerWidget::setPlaybackSeekingEnabled);
     connect(m_explorer,&ExplorerWidget::hideRequested,this,[this] { m_explorerAction->setChecked(false); });
     connect(m_player,&PlayerWidget::showExplorerRequested,this,[this] { m_explorerAction->setChecked(true); });
     connect(m_player,&PlayerWidget::imageNavigationRequested,this,[this](int direction) {
-        m_explorer->navigateImage(m_player->currentPath(), direction);
+        m_mediaNavigation->navigate(m_explorer->navigationSource(m_player->currentPath(), direction, MediaType::Image),
+                                    MediaType::Image);
     });
+    connect(m_player, &PlayerWidget::mediaNavigationRequested, this, [this](int direction) {
+        m_mediaNavigation->navigate(m_explorer->navigationSource(m_player->currentPath(), direction, m_player->playbackCategory()),
+            m_player->playbackCategory());
+    });
+    connect(m_mediaNavigation, &MediaNavigation::candidateSelected, m_browser, &BrowserController::selectFile);
+    connect(m_player, &PlayerWidget::playbackResolved, m_mediaNavigation, &MediaNavigation::remember);
+    connect(m_mediaNavigation, &MediaNavigation::failed, this, &MainWindow::showError);
     connect(m_explorer, &ExplorerWidget::contentsReady, this, [this] {
         m_player->prefetchImages(m_explorer->adjacentImages(m_player->currentPath()));
     });
     connect(m_browser,&BrowserController::directoryChanged,this,[this](const QString& path) {
+        m_mediaNavigation->cancel();
         if (path.isEmpty()) m_explorer->clearDirectory();
         else m_explorer->setDirectory(path);
         m_player->setDirectory(path);
@@ -68,6 +92,7 @@ MainWindow::MainWindow(ThemeManager* theme, SettingsService* settings, QWidget* 
         m_status->setToolTip(QDir::toNativeSeparators(path));
     });
     connect(m_browser,&BrowserController::fileChanged,this,[this](const FileDetails& details) {
+        m_mediaNavigation->cancel();
         m_player->setFile(details);
         if (!details.path.isEmpty()) m_explorer->highlightFile(details.path);
         m_player->prefetchImages(m_explorer->adjacentImages(details.path));
@@ -101,7 +126,9 @@ void MainWindow::createMenus()
     m_explorerAction->setCheckable(true); m_explorerAction->setChecked(true);
     m_explorerAction->setShortcut(QKeySequence("Ctrl+B"));
     connect(m_explorerAction,&QAction::toggled,this,[this](bool visible) {
+        if (!visible) m_visibleSplitterState = m_splitter->saveState();
         m_settings.explorerVisible=visible; m_explorer->setVisible(visible);
+        if (visible) m_splitter->restoreState(m_visibleSplitterState);
         m_player->setExplorerVisible(visible);
         if (m_settingsDialog && !m_applyingSettings)
             m_settingsDialog->syncVisibility(m_settings.explorerVisible, m_settings.statusBarVisible);
@@ -119,8 +146,8 @@ void MainWindow::createMenus()
     m_fullscreenAction->setCheckable(true); m_fullscreenAction->setShortcut(QKeySequence("F"));
     connect(m_fullscreenAction,&QAction::triggered,this,&MainWindow::toggleFullscreen);
     auto* playback = menuBar()->addMenu(tr("播放(&P)"));
-    playback->addAction(tr("播放 / 暂停（尚未接入）"))->setEnabled(false);
-    playback->addAction(tr("静音（尚未接入）"))->setEnabled(false);
+    connect(playback->addAction(tr("播放 / 暂停")), &QAction::triggered, m_player, &PlayerWidget::togglePause);
+    connect(playback->addAction(tr("静音")), &QAction::triggered, m_player, &PlayerWidget::toggleMute);
     auto* help = menuBar()->addMenu(tr("帮助(&H)"));
     connect(help->addAction(tr("关于 Videx")),&QAction::triggered,this,&MainWindow::showAbout);
     auto* escape = new QShortcut(QKeySequence(Qt::Key_Escape),this);
@@ -166,6 +193,7 @@ void MainWindow::applySettings(const SessionSettings& settings)
     const QScopedValueRollback<bool> applying(m_applyingSettings, true);
     m_settings=settings;
     m_theme->setMode(settings.theme);
+    m_player->applyPlaybackPreferences(settings.defaultRate, settings.autoPlayNext);
     m_explorerAction->setChecked(settings.explorerVisible);
     m_statusAction->setChecked(settings.statusBarVisible);
     savePreferences();
@@ -180,7 +208,11 @@ void MainWindow::savePreferences()
 void MainWindow::toggleFullscreen()
 {
     if (isFullScreen()) setWindowState(m_beforeFullscreen);
-    else { m_beforeFullscreen=windowState(); showFullScreen(); }
+    else {
+        m_beforeFullscreen = windowState();
+        m_beforeFullscreenGeometry = saveGeometry();
+        showFullScreen();
+    }
     syncFullscreen();
 }
 void MainWindow::syncFullscreen()
@@ -191,4 +223,13 @@ void MainWindow::changeEvent(QEvent* event)
 {
     QMainWindow::changeEvent(event);
     if (event->type()==QEvent::WindowStateChange && m_fullscreenAction) syncFullscreen();
+}
+void MainWindow::closeEvent(QCloseEvent* event)
+{
+    QMainWindow::closeEvent(event);
+    if (!event->isAccepted()) return;
+    const auto geometry = isFullScreen() && !m_beforeFullscreenGeometry.isEmpty()
+        ? m_beforeFullscreenGeometry : saveGeometry();
+    const auto splitter = m_explorer->isHidden() ? m_visibleSplitterState : m_splitter->saveState();
+    m_settingsService->saveWindowLayout(geometry, splitter);
 }

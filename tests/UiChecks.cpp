@@ -31,6 +31,7 @@
 #include <QDebug>
 #include <QSettings>
 #include <QStatusBar>
+#include <QSplitter>
 #include <functional>
 
 namespace {
@@ -100,6 +101,52 @@ int main(int argc, char** argv)
     app.setApplicationVersion("0.1.0");
     ThemeManager theme;
     const auto args = app.arguments();
+    for (const auto& operation : {QStringLiteral("--write-layout"), QStringLiteral("--read-layout"),
+                                  QStringLiteral("--write-hidden-fullscreen-layout"), QStringLiteral("--read-hidden-fullscreen-layout")}) {
+        const int position = args.indexOf(operation);
+        if (position < 0) continue;
+        if (position + 1 >= args.size()) return 2;
+        SettingsService settings(args[position+1]);
+        MainWindow window(&theme, &settings);
+        window.show();
+        QApplication::processEvents();
+        auto* splitter = window.findChild<QSplitter*>();
+        auto* explorer = window.findChild<ExplorerWidget*>();
+        QAction* sidebar = nullptr;
+        QAction* fullscreen = nullptr;
+        for (auto* action : window.findChildren<QAction*>()) {
+            if (action->shortcut() == QKeySequence("Ctrl+B")) sidebar = action;
+            if (action->shortcut() == QKeySequence("F")) fullscreen = action;
+        }
+        if (!sidebar || !fullscreen) return 2;
+        const bool hiddenFullscreen = operation.contains("hidden-fullscreen");
+        if (operation.startsWith("--write")) {
+            window.resize(900, 600);
+            window.move(50, 70);
+            QApplication::processEvents();
+            splitter->setSizes({330, splitter->width() - 331});
+            QApplication::processEvents();
+            check(qAbs(splitter->sizes().first() - 330) <= 1, "resize sidebar before saving layout");
+            if (hiddenFullscreen) {
+                sidebar->setChecked(false);
+                fullscreen->trigger();
+                QApplication::processEvents();
+                check(window.isFullScreen(), "close layout fixture from fullscreen");
+            }
+            window.close();
+            check(!settings.windowGeometry().isEmpty() && !settings.splitterState().isEmpty(), "close persists native window layout");
+        } else {
+            check(window.size() == QSize(900, 600), "restart restores normal window dimensions");
+            check(!window.isFullScreen(), "restart after fullscreen opens a normal window");
+            check(explorer->isHidden() == hiddenFullscreen, "layout restore preserves sidebar visibility preference");
+            if (hiddenFullscreen) {
+                sidebar->setChecked(true);
+                QApplication::processEvents();
+            }
+            check(qAbs(splitter->sizes().first() - 330) <= 1, "restart and unhide restore resized sidebar width");
+        }
+        return failures == 0 ? 0 : 1;
+    }
     const int sidebarRead = args.indexOf("--read-sidebar");
     if (sidebarRead >= 0) {
         if (sidebarRead + 2 >= args.size()) return 2;
@@ -153,6 +200,12 @@ int main(int argc, char** argv)
     QTemporaryDir fixture;
     check(fixture.isValid(), "temporary test directory");
     if (!fixture.isValid()) return 1;
+    const auto layoutConfig = fixture.filePath("layout.ini");
+    check(runChild({"--write-layout", layoutConfig}), "save resized window layout in separate process");
+    check(runChild({"--read-layout", layoutConfig}), "restart restores window and sidebar dimensions");
+    const auto fullscreenLayoutConfig = fixture.filePath("fullscreen-layout.ini");
+    check(runChild({"--write-hidden-fullscreen-layout", fullscreenLayoutConfig}), "save layout with sidebar hidden during fullscreen");
+    check(runChild({"--read-hidden-fullscreen-layout", fullscreenLayoutConfig}), "restart restores normal geometry and hidden sidebar width");
     const QString library = fixture.path()+"/媒体与图片";
     const QString empty = fixture.path()+"/empty";
     check(QDir().mkpath(library+"/子文件夹/更深目录"), "create nested folders");

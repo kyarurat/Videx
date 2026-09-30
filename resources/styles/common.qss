@@ -66,3 +66,6 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
 QToolTip { background: @panel; color: @text; border: 1px solid @border; padding: 5px; }
 QFrame#settingRow { border-bottom: 1px solid @border; }
+QWidget#videoSurface { background: #000000; }
+QWidget#playbackPane { background: @bg; }
+QLabel#audioTitle { padding: 24px; }

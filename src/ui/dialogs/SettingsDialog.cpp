@@ -31,7 +31,7 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent)
         auto* label = new QLabel(heading,page); label->setProperty("role","section"); rows->addWidget(label);
         pages->addWidget(page); return rows;
     };
-    const auto future = tr("视频播放尚未接入");
+    const auto future = tr("播放进度恢复暂未接入");
     auto* general = makePage(tr("常规偏好"));
     m_restore = new QCheckBox(this);
     m_restore->setObjectName("restoreDirectory");
@@ -41,13 +41,12 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent)
     general->addStretch();
     auto* playback = makePage(tr("播放偏好"));
     m_resume = new QCheckBox(this); m_next = new QCheckBox(this);
-    m_resume->setEnabled(false); m_next->setEnabled(false);
+    m_resume->setEnabled(false);
     playback->addWidget(settingRow(tr("记住播放进度"),future,m_resume,this));
-    playback->addWidget(settingRow(tr("自动播放下一集"),future,m_next,this));
+    playback->addWidget(settingRow(tr("自动播放下一项"),tr("自然播放结束后，继续播放同一文件夹中的同类媒体。"),m_next,this));
     m_rate = new ComboBox(this);
-    m_rate->setEnabled(false);
     for (double rate : {0.5,0.75,1.0,1.25,1.5,1.75,2.0}) m_rate->addItem(tr("%1×").arg(rate),rate);
-    playback->addWidget(settingRow(tr("默认倍速"),future,m_rate,this));
+    playback->addWidget(settingRow(tr("默认倍速"),tr("打开视频或音频时使用此播放速度。"),m_rate,this));
     playback->addStretch();
     auto* appearance = makePage(tr("外观与布局"));
     m_theme = new ComboBox(this); m_theme->setObjectName("themeMode");

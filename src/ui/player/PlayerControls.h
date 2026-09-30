@@ -5,12 +5,14 @@ class IconButton;
 class QSlider;
 class QLabel;
 class QComboBox;
+struct PlaybackSnapshot;
 class PlayerControls : public QWidget
 {
     Q_OBJECT
 public:
     PlayerControls(ThemeManager* theme, QWidget* parent = nullptr);
     void setFullscreen(bool fullscreen);
+    void updateState(const PlaybackSnapshot& state);
 signals:
     void playRequested();
     void seekRequested(int seconds);

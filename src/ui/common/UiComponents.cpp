@@ -18,7 +18,12 @@ IconButton::IconButton(Glyph glyph, const QString& label, ThemeManager* theme, Q
     connect(theme, &ThemeManager::themeChanged, this, [this] { refreshIcon(); });
     refreshIcon();
 }
-void IconButton::setGlyph(Glyph glyph) { m_glyph = glyph; refreshIcon(); }
+void IconButton::setGlyph(Glyph glyph)
+{
+    if (m_glyph == glyph) return;
+    m_glyph = glyph;
+    refreshIcon();
+}
 void IconButton::refreshIcon()
 {
     QIcon icon;

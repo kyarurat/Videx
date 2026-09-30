@@ -7,6 +7,7 @@ class ImageView;
 class QLabel;
 class QDialog;
 class QTableWidget;
+class QTimer;
 
 class ImagePane : public QWidget
 {
@@ -32,4 +33,6 @@ private:
     QString m_path;
     QPointer<QDialog> m_details;
     bool m_metadataPending = false;
+    QTimer* m_originalTimer;
+    quint64 m_viewGeneration = 0;
 };

@@ -1,5 +1,6 @@
 #pragma once
 #include <QString>
+#include <QByteArray>
 #include <memory>
 #include "app/UiState.h"
 class QSettings;
@@ -16,6 +17,9 @@ public:
     bool saveRestoreDirectory(bool enabled);
     SessionSettings loadPreferences() const;
     bool savePreferences(const SessionSettings& preferences);
+    QByteArray windowGeometry() const;
+    QByteArray splitterState() const;
+    bool saveWindowLayout(const QByteArray& geometry, const QByteArray& splitter);
 private:
     std::unique_ptr<QSettings> m_settings;
 };
