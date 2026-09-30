@@ -4,19 +4,21 @@
 
 **Project Name:** Videx
 
-**Updated product positioning:** Videx is a lightweight local video and image viewer, intended to support multiple video and image formats. Browsing courses is one possible use case, not the product identity. Product copy should describe general media browsing and viewing. Existing video playback guidance below still applies to the video subsystem; image viewing is planned and must not be presented as already implemented.
+**Product positioning:** Videx is a lightweight local media browser and viewer for video, audio, and images. Browsing courses is one possible use case, not the product identity. Product copy should describe general local media browsing, viewing, and playback.
 
-Videx is a lightweight, cross-platform desktop video explorer built with **Qt 6 Widgets** and **libmpv**.
+Videx is a native, cross-platform desktop application built with **C++20** and **Qt 6 Widgets**. Image viewing uses Qt image APIs, LibRaw, and libheif; Exiv2 reads photographic metadata. The planned video/audio backend is **libmpv**.
+
+**Implementation status:** The application supports directory browsing, persisted preferences, still-image viewing (including SVG, HEIC/AVIF and LibRaw-supported camera RAW), viewing controls, and image details with EXIF/IPTC/XMP and GPS when present. Unsupported formats show a clear message in the right-hand viewer. Video/audio playback and libmpv integration remain unimplemented. See `docs/image-viewer.md` for verified scope and limitations; do not claim every camera, compression variant, animation, or multi-page format is supported.
 
 The application provides a VS Code-style desktop layout:
 
 - File and directory explorer on the left
-- Video playback area on the right
-- Playback controls at the bottom
+- Media viewing area on the right
+- Media-specific controls within the right-hand area
 - Optional status bar / toolbar / menu bar
 - Support for Windows and Linux
 
-The primary use case is browsing directories containing videos, courses, recordings, and other media files while playing them directly inside the same application.
+The primary use case is browsing local directories containing videos, audio recordings, music, and images, then viewing or playing them directly inside the same application.
 
 Videx is intended to remain lightweight and native. It must not become a browser-based desktop application.
 
@@ -55,7 +57,7 @@ Required technologies:
 - Qt 6
 - Qt Widgets
 - CMake
-- libmpv
+- libmpv (for video/audio playback when integrated)
 - QFileSystemModel
 - QTreeView
 - QSplitter
@@ -192,12 +194,14 @@ videx/
 The exact structure may evolve, but maintain clear separation between:
 
 - UI
-- media playback
+- media classification, video/audio playback, and image viewing
 - filesystem logic
 - persistent state
 - reusable utilities
 
 Do not place the entire application inside `MainWindow.cpp`.
+
+The tree above is illustrative. Add a dedicated image-viewing component when implementing images; do not rename or move working modules merely to match this structure.
 
 ---
 
@@ -210,12 +214,16 @@ UI Layer
    ↓
 Application / Service Layer
    ↓
-Player / Filesystem abstraction
+Media backends / Filesystem abstraction
    ↓
 Qt / libmpv
 ```
 
-The UI should not directly contain complicated playback or persistence logic.
+The UI should not directly contain complicated decoding, playback, or persistence logic.
+
+Keep reusable media classification and dispatch separate from widgets. Distinguish video, audio, image, and unknown/unsupported files without assuming every opened file has a timeline or video frames. Route video and audio through the same MpvPlayer abstraction; route images through a dedicated Qt image-viewing component. Avoid introducing a generic plugin framework prematurely.
+
+When switching media, stop the previous playback session, release obsolete image data, and reset controls and metadata. Discard stale asynchronous results so a previously opened file cannot overwrite the current view or continue playing unexpectedly.
 
 For example:
 
@@ -255,10 +263,10 @@ Recommended layout:
 ├──────────────┬───────────────────────────────────────┤
 │ EXPLORER     │                                       │
 │              │                                       │
-│ ▼ Courses    │                                       │
-│   ▼ Qt       │              VIDEO                    │
-│     01.mp4   │              PLAYER                   │
-│     02.mkv   │                                       │
+│ ▼ Media      │                                       │
+│   ▼ Local    │              MEDIA                    │
+│     01.mp4   │              VIEWER                   │
+│     02.jpg   │                                       │
 │   ▶ Other    │                                       │
 │              │                                       │
 ├──────────────┴───────────────────────────────────────┤
@@ -272,7 +280,9 @@ Use:
 QSplitter
 ```
 
-to separate the explorer and player.
+to separate the explorer and media viewing area.
+
+The diagram illustrates video/audio playback. Controls belong to the right-hand media area; the explorer occupies its own full-height column. Images use viewing controls, while file information and empty states hide playback controls.
 
 Users must be able to resize the explorer panel.
 
@@ -308,24 +318,21 @@ The explorer should eventually support:
 
 Initial implementation should prioritize reliability over custom visual effects.
 
-### File filtering
+### Media recognition and optional filtering
 
-Supported video extensions may include:
+Preserve the current default of showing all files and directories. Media recognition determines how a file opens; it must not silently hide non-media files. Any future media-only filter must be explicit and optional.
+
+Candidate formats for implementation and verification include:
 
 ```text
-.mp4
-.mkv
-.webm
-.mov
-.avi
-.m4v
-.ts
-.m2ts
+Video: .mp4 .mkv .webm .mov .avi .m4v .ts .m2ts
+Audio: .mp3 .flac .wav .ogg .opus .m4a .aac .wma
+Image: .jpg .jpeg .png .bmp .webp .gif .tif .tiff
 ```
 
-Do not assume the filename extension guarantees the actual codec.
+These are candidate extensions, not guaranteed support. Keep case-insensitive classification reusable and shared by opening, optional filters, and navigation. Extensions are hints; containers can contain audio, video, or both.
 
-Playback capability should ultimately be determined by mpv.
+Actual video/audio capability is determined by mpv; image capability is determined by the available Qt image readers and deployed plugins. Resolve ambiguous types using backend results when opening the file, without probing every file during directory browsing. Unsupported files should retain useful file information and receive an actionable message when viewing fails.
 
 ---
 
@@ -353,15 +360,17 @@ Avoid:
 3.mp4
 ```
 
-This behavior is especially important for courses and episodic video directories.
+Apply the same ordering to video, audio, and image navigation, including numbered recordings and image sequences.
 
 Keep natural sorting implementation reusable rather than embedding it directly inside UI event handlers.
 
 ---
 
-## 10. Video Playback
+## 10. Video/Audio Playback and Image Viewing
 
-Use **libmpv** as the media playback engine.
+### Video and audio
+
+Use **libmpv** as the shared video and audio playback engine. Audio-only files are first-class media and must not require a video stream to load successfully. Show a simple audio view with filename and available metadata; cover art is optional and must not be mistaken for a playable video stream.
 
 Do not implement the primary player using `QMediaPlayer` unless explicitly requested.
 
@@ -421,11 +430,19 @@ signals:
 
 This is an architectural example, not a mandatory exact API.
 
+### Images
+
+Prefer `QImageReader` and `QImage` for common formats, LibRaw for camera RAW, and libheif for HEIC/AVIF, with native Qt Widgets for display. Use Exiv2 for photographic metadata. Keep decoder details in `src/media` and viewing controls in `src/ui/images`; third-party sources and licenses are documented in `docs/third-party.md`. Do not force still images through mpv or invent a duration for them.
+
+The initial image viewer should support aspect-ratio-preserving fit-to-window, actual size, zoom, pan, and previous/next image navigation. Respect orientation metadata where supported. Rotation, animated images, multi-page images, and slideshows are separate enhancements; do not claim them without implementation and verification.
+
+Handle corrupt files, unavailable image plugins, and excessive image dimensions gracefully. Bound decoded memory and caches, use scaled decoding where supported, and keep expensive decoding off the GUI thread. Create display resources and update widgets on the GUI thread.
+
 ---
 
-## 11. Player Controls
+## 11. Media Controls
 
-The first implementation should include:
+Video and audio playback should include:
 
 - Play / Pause
 - Seek bar
@@ -435,6 +452,8 @@ The first implementation should include:
 - Mute
 - Playback speed
 - Fullscreen
+
+Images use fit, actual size, zoom, and navigation controls instead of seek, volume, or playback-rate controls. Fullscreen applies to the viewing area. Only show playback controls for a loaded video/audio session, not merely for a selected filename or extension. Disable operations unsupported by the current media, such as seeking when no seekable timeline is available.
 
 Useful playback rates:
 
@@ -448,7 +467,7 @@ Useful playback rates:
 2.0x
 ```
 
-Keyboard shortcuts should eventually include common conventions:
+Playback shortcuts should eventually include common conventions within the appropriate media context:
 
 ```text
 Space       Play / Pause
@@ -463,11 +482,13 @@ Ctrl+O      Open directory or file
 
 Do not capture shortcuts globally unless required.
 
+Preserve native file-tree and input-widget keyboard navigation. Playback shortcuts must not steal arrow keys or Space from focused controls. Image navigation and zoom shortcuts should be scoped to the image viewer and documented when implemented.
+
 ---
 
 ## 12. Playback History
 
-Videx should support restoring playback position.
+Videx should support restoring video and audio playback position.
 
 Persist at least:
 
@@ -496,6 +517,8 @@ SQLite may be introduced later if the data model becomes more complex.
 
 Avoid introducing a database prematurely.
 
+Images may later remember the last viewed file or view state, but must not create fictitious playback positions or durations. Keep image view state distinct from timed-media history and preserve compatibility with existing settings when extending persistence.
+
 ---
 
 ## 13. Settings
@@ -523,9 +546,9 @@ Do not store machine-specific absolute development paths in source files.
 
 ---
 
-## 14. Auto Play Next
+## 14. Media Navigation and Auto Play Next
 
-When the current video finishes, Videx should eventually be able to play the next video in the current directory.
+When the current video or audio finishes naturally, Videx should eventually be able to play the next file of the same media category in the current directory. Do not auto-advance on load failure, manual stop, or media switching. Mixed-media queues require a separate explicit feature; do not unexpectedly switch between audio, video, and images.
 
 Ordering should follow the explorer's natural sorting rules.
 
@@ -546,6 +569,8 @@ After `01` finishes:
 may automatically start if the feature is enabled.
 
 Keep this feature configurable.
+
+Images use explicit previous/next navigation through images in the current directory. Timed slideshows are optional future functionality and must not reuse audio/video completion semantics. At the end of a sequence, stop unless repeat has been explicitly enabled.
 
 ---
 
@@ -839,6 +864,8 @@ Handle errors such as:
 - mpv initialization failure
 - missing library
 - failed playback
+- image decoding failure or excessive image dimensions
+- missing image format plugin
 - invalid configuration
 
 Show actionable errors to the user when appropriate.
@@ -870,6 +897,7 @@ Any expensive future operations such as:
 - thumbnail generation
 - metadata extraction
 - media probing
+- large image decoding and scaling
 
 must not block the GUI thread.
 
@@ -899,11 +927,16 @@ Do not create complicated concurrency architecture prematurely.
 
 Keep external dependencies minimal.
 
-Current expected dependencies:
+Current image dependencies and planned playback dependency:
 
 ```text
 Qt 6
-libmpv
+Qt Image Formats plugins
+LibRaw
+Exiv2
+libheif (libde265 / libaom)
+zlib
+libmpv (planned)
 ```
 
 Do not add a library merely to implement functionality already provided cleanly by Qt or the C++ standard library.
@@ -932,6 +965,7 @@ Qt platform plugin
 libmpv.dll
 mpv/FFmpeg related runtime dependencies
 application resources
+Qt image format plugins required by supported image formats
 ```
 
 Use Qt deployment tools where appropriate, such as:
@@ -962,9 +996,13 @@ Future distribution may use:
 
 Packaging architecture should not affect core application design.
 
+On both platforms, verify advertised image formats against the packaged Qt image plugins and video/audio formats against the distributed or system mpv backend. Development-machine support alone does not establish packaged support.
+
 ---
 
-## 31. Initial Development Milestones
+## 31. Development Milestones
+
+These describe incremental work areas, not completion status. Preserve existing browsing behavior while adding each media backend. Basic image viewing and audio playback are core scope, not advanced extras that must wait for every video enhancement.
 
 ### Phase 1 — Application Skeleton
 
@@ -975,11 +1013,11 @@ Implement:
 - menu bar
 - QSplitter layout
 - explorer area
-- player placeholder
+- media viewer placeholder
 - status bar
 - dark theme
 
-No real video playback is required until the basic UI structure is stable.
+No media decoding is required until the basic UI structure is stable.
 
 ### Phase 2 — File Explorer
 
@@ -990,23 +1028,25 @@ Implement:
 - open directory
 - remember last directory
 - double-click file handling
-- supported media detection
+- reusable video/audio/image classification with an unknown-file fallback
 
-### Phase 3 — mpv Integration
+### Phase 3 — Basic Media Backends
 
 Implement:
 
 - libmpv initialization
 - embedded video output
-- open media
+- open video and audio, including audio-only files
 - play
 - pause
 - seek
 - volume
 - playback position
 - duration
+- Qt-based still-image decoding and display
+- safe switching between file information, images, video, and audio
 
-### Phase 4 — Player Controls
+### Phase 4 — Media Controls
 
 Implement:
 
@@ -1016,14 +1056,17 @@ Implement:
 - mute
 - fullscreen
 - keyboard shortcuts
+- image fit, actual size, zoom, and pan
+- controls and shortcuts scoped to the active media type
 
 ### Phase 5 — Usability
 
 Implement:
 
-- resume playback
+- resume video/audio playback
 - recent directories
-- next video
+- previous/next media within the current category
+- configurable auto-play-next for video/audio
 - natural sorting
 - window state persistence
 
@@ -1037,10 +1080,11 @@ Potential additions:
 - playlist
 - search
 - favorites
-- video metadata
+- richer media metadata and audio cover art
 - thumbnails
+- animated/multi-page images and slideshows
 
-Do not prematurely implement Phase 6 while basic playback remains unstable.
+Do not prematurely implement Phase 6 while basic playback, image viewing, or media switching remains unstable.
 
 ---
 
@@ -1050,12 +1094,13 @@ Avoid feature creep.
 
 The primary product concept is:
 
-> Browse files on the left and play videos on the right.
+> Browse local files on the left; view images and play video/audio on the right.
 
 Do not turn Videx into:
 
 - a full file manager
 - a video editor
+- an image editor or digital audio workstation
 - an IDE
 - a media server
 - a streaming platform
@@ -1117,6 +1162,9 @@ Good candidates:
 - playback history logic
 - settings serialization
 - media extension filtering
+- media classification and backend dispatch
+- media switching and stale-result handling
+- image sizing, orientation, and decode-failure handling
 - playlist ordering
 - time formatting
 
@@ -1142,7 +1190,7 @@ If the environment does not allow full verification, document what remains unver
 
 ## 37. Current Product Direction
 
-The current priority is a lightweight local video explorer with a VS Code-inspired workflow.
+The current priority is a lightweight local media browser for video, audio, and images with a VS Code-inspired workflow.
 
 Core direction:
 
@@ -1157,7 +1205,7 @@ QFileSystemModel
 +
 QTreeView
 +
-libmpv
+libmpv (video/audio) + Qt image APIs (images)
 ```
 
 Target experience:
@@ -1167,13 +1215,13 @@ Open directory
      ↓
 Browse files in explorer
      ↓
-Select / double-click video
+Open a video, audio file, or image
      ↓
-Play inside application
+Play or view inside the application
      ↓
-Remember playback progress
+Remember playback progress for video/audio
      ↓
-Continue with next video
+Navigate to the next file in the current media category
 ```
 
 Keep this workflow simple, fast, and reliable.

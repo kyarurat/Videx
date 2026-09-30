@@ -1,0 +1,7 @@
+find_package(libheif 1.19 CONFIG QUIET)
+if(NOT TARGET heif)
+    if(NOT VIDEX_FETCH_IMAGE_DEPENDENCIES)
+        message(FATAL_ERROR "Install libheif >= 1.19 with HEVC and AV1 decoders or enable VIDEX_FETCH_IMAGE_DEPENDENCIES")
+    endif()
+    add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/heif-dependencies ${CMAKE_BINARY_DIR}/heif-dependencies)
+endif()

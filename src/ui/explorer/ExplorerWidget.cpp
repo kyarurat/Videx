@@ -1,6 +1,8 @@
 #include "ExplorerWidget.h"
 #include "ui/common/UiComponents.h"
 #include <QFileSystemModel>
+#include "media/ImageDecoder.h"
+
 #include <QTreeView>
 #include <QStackedWidget>
 #include <QVBoxLayout>
@@ -10,6 +12,8 @@
 #include <QItemSelectionModel>
 #include <QDir>
 #include <QKeyEvent>
+#include <QCoreApplication>
+#include <QScopedValueRollback>
 
 ExplorerWidget::ExplorerWidget(ThemeManager* theme, QWidget* parent) : QWidget(parent)
 {
@@ -68,6 +72,16 @@ bool ExplorerWidget::eventFilter(QObject* watched, QEvent* event)
 {
     if (watched == m_tree && event->type() == QEvent::KeyPress) {
         const auto* key = static_cast<QKeyEvent*>(event);
+        if (!m_forwardingNavigation && (key->key() == Qt::Key_Up || key->key() == Qt::Key_Down)
+            && key->modifiers() == Qt::NoModifier) {
+            const auto previous = m_tree->currentIndex();
+            QScopedValueRollback<bool> forwarding(m_forwardingNavigation, true);
+            QCoreApplication::sendEvent(m_tree, event);
+            const auto current = m_tree->currentIndex();
+            if (m_model && current.isValid() && current != previous && !m_model->isDir(current))
+                emit fileOpenRequested(m_model->filePath(current));
+            return true;
+        }
         if ((key->key() == Qt::Key_Return || key->key() == Qt::Key_Enter)
             && (key->modifiers() & ~Qt::KeypadModifier) == Qt::NoModifier) {
             const auto index = m_tree->currentIndex();
@@ -127,6 +141,7 @@ void ExplorerWidget::setDirectory(const QString& path)
                 m_pendingHighlight.clear();
             }
         }
+        emit contentsReady();
     });
     connect(m_model, &QAbstractItemModel::rowsInserted, this, updateHint);
     connect(m_model, &QAbstractItemModel::rowsRemoved, this, updateHint);
@@ -144,4 +159,45 @@ void ExplorerWidget::highlightFile(const QString& path)
     if (!index.isValid()) return;
     m_tree->setCurrentIndex(index);
     m_tree->scrollTo(index);
+}
+
+void ExplorerWidget::navigateImage(const QString& currentPath, int direction)
+{
+    if (!m_model || currentPath.isEmpty() || direction == 0) return;
+    // index(path) can insert the opened file before the asynchronous directory
+    // listing arrives. Flush the pending sort before interpreting row order.
+    m_model->sort(m_tree->header()->sortIndicatorSection(), m_tree->header()->sortIndicatorOrder());
+    const auto current = m_model->index(currentPath);
+    if (!current.isValid()) return;
+    const auto parent = current.parent();
+    const int step = direction > 0 ? 1 : -1;
+    for (int row = current.row() + step; row >= 0 && row < m_model->rowCount(parent); row += step) {
+        const auto index = m_model->index(row, 0, parent);
+        const auto path = m_model->filePath(index);
+        if (!m_model->isDir(index) && ImageDecoder::isImageCandidate(path)) {
+            emit fileOpenRequested(path);
+            return;
+        }
+    }
+}
+
+QStringList ExplorerWidget::adjacentImages(const QString& currentPath)
+{
+    QStringList paths;
+    if (!m_model || currentPath.isEmpty() || !ImageDecoder::isImageCandidate(currentPath)) return paths;
+    m_model->sort(m_tree->header()->sortIndicatorSection(), m_tree->header()->sortIndicatorOrder());
+    const auto current = m_model->index(currentPath);
+    if (!current.isValid()) return paths;
+    const auto parent = current.parent();
+    const auto extensions = ImageDecoder::supportedExtensions();
+    for (const int step : {1, -1}) {
+        for (int row = current.row() + step; row >= 0 && row < m_model->rowCount(parent); row += step) {
+            const auto index = m_model->index(row, 0, parent);
+            if (!m_model->isDir(index) && extensions.contains(m_model->fileInfo(index).suffix().toLower())) {
+                paths.append(m_model->filePath(index));
+                break;
+            }
+        }
+    }
+    return paths;
 }

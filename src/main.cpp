@@ -10,7 +10,7 @@ int main(int argc, char* argv[])
     QApplication app(argc,argv);
     QCoreApplication::setApplicationName(QStringLiteral("Videx"));
     QCoreApplication::setOrganizationName(QStringLiteral("Videx"));
-    QCoreApplication::setApplicationVersion(QStringLiteral("0.1.0"));
+    QCoreApplication::setApplicationVersion(QStringLiteral("0.1.0-image-view"));
     QTranslator translator;
     // Chinese source strings are the fallback until additional catalogs are shipped.
     if (translator.load(QLocale(QStringLiteral("zh_CN")),QStringLiteral("videx"),QStringLiteral("_"),

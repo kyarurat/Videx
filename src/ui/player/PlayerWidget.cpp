@@ -1,5 +1,6 @@
 #include "PlayerWidget.h"
 #include "PlayerControls.h"
+#include "ui/images/ImagePane.h"
 #include "ui/common/UiComponents.h"
 #include <QVBoxLayout>
 #include <QFormLayout>
@@ -54,7 +55,7 @@ PlayerWidget::PlayerWidget(ThemeManager* theme, QWidget* parent) : QWidget(paren
     detailsLayout->addStretch();
     m_name = new QLabel(details);
     m_name->setObjectName("selectedFileName");
-    m_name->setProperty("role", "heading");
+    m_name->setProperty("role", "muted");
     detailsLayout->addWidget(m_name);
     auto* form = new QFormLayout;
     form->setHorizontalSpacing(24);
@@ -77,12 +78,21 @@ PlayerWidget::PlayerWidget(ThemeManager* theme, QWidget* parent) : QWidget(paren
     form->addRow(tr("扩展名"), m_type);
     form->addRow(tr("修改时间"), m_modified);
     detailsLayout->addLayout(form);
-    auto* hint = new QLabel(tr("当前仅显示文件信息，视频播放与图片查看将在后续版本提供。"), details);
-    hint->setProperty("role", "muted");
+    auto* hint = new QLabel(tr("格式不支持"), details);
+    m_formatHint = hint;
+    hint->setObjectName("unsupportedFormatMessage");
+    hint->setProperty("role", "heading");
     hint->setWordWrap(true);
-    detailsLayout->addWidget(hint);
+    detailsLayout->insertWidget(1, hint);
     detailsLayout->addStretch();
     m_stack->addWidget(details);
+    m_imagePane = new ImagePane(this);
+    m_stack->addWidget(m_imagePane);
+    connect(m_imagePane, &ImagePane::failed, this, [this](const QString& message) {
+        m_formatHint->setText(message);
+        m_stack->setCurrentIndex(1);
+    });
+    connect(m_imagePane, &ImagePane::navigationRequested, this, &PlayerWidget::imageNavigationRequested);
     layout->addWidget(m_stack,1);
     m_controls = new PlayerControls(theme, this);
     layout->addWidget(m_controls);
@@ -99,31 +109,44 @@ void PlayerWidget::setDirectory(const QString& path)
 
 void PlayerWidget::setFile(const FileDetails& details)
 {
+    m_currentFile = details;
     setPlaybackMedia(PlaybackMedia::None);
     setNotice({});
     const bool selected = !details.path.isEmpty();
     m_title->setText(selected ? details.name : tr("媒体查看器"));
     m_title->setToolTip(selected ? details.name : QString{});
-    m_stack->setCurrentIndex(selected ? 1 : 0);
     if (!selected) {
+        m_stack->setCurrentIndex(0);
+        m_imagePane->clear();
         m_name->clear();
         m_path->clear();
-        m_empty->setText(m_directory.isEmpty() ? tr("视频与图片，一处浏览") : tr("双击打开文件"),
+        m_empty->setText(m_directory.isEmpty() ? tr("本地媒体，一处浏览") : tr("双击打开文件"),
             m_directory.isEmpty() ? tr("选择本地文件直接查看，或选择文件夹浏览其中的内容。")
                                   : tr("双击左侧文件树中的文件，在这里查看名称、位置和基本信息。"));
         return;
     }
     refreshFileDetails(details);
+    m_stack->setCurrentWidget(m_imagePane);
+    m_imagePane->open(details.path);
 }
 
 void PlayerWidget::refreshFileDetails(const FileDetails& details)
 {
+    const bool changed = details.path == m_currentFile.path
+        && (details.size != m_currentFile.size || details.modified != m_currentFile.modified);
+    m_currentFile = details;
     m_name->setText(details.name);
     m_path->setText(QDir::toNativeSeparators(details.path));
     m_size->setText(tr("%1（%2 字节）").arg(QLocale().formattedDataSize(details.size), QLocale().toString(details.size)));
     m_type->setText(details.suffix.isEmpty() ? tr("无扩展名") : details.suffix.toUpper());
     m_modified->setText(QLocale().toString(details.modified, QLocale::ShortFormat));
+    if (changed && !details.path.isEmpty()) {
+        m_stack->setCurrentWidget(m_imagePane);
+        m_imagePane->open(details.path, true);
+    }
 }
+
+void PlayerWidget::prefetchImages(const QStringList& paths) { m_imagePane->prefetch(paths); }
 
 void PlayerWidget::setNotice(const QString& message)
 {

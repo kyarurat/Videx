@@ -1,5 +1,6 @@
 #pragma once
 #include <QWidget>
+#include <QStringList>
 class QFileSystemModel;
 class QTreeView;
 class QStackedWidget;
@@ -14,6 +15,8 @@ public:
     void setDirectory(const QString& path);
     void clearDirectory();
     void highlightFile(const QString& path);
+    void navigateImage(const QString& currentPath, int direction);
+    QStringList adjacentImages(const QString& currentPath);
     QString directory() const { return m_directory; }
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -21,6 +24,7 @@ signals:
     void openRequested();
     void hideRequested();
     void fileOpenRequested(const QString& path);
+    void contentsReady();
 private:
     QFileSystemModel* m_model = nullptr;
     QTreeView* m_tree;
@@ -30,4 +34,5 @@ private:
     QString m_directory;
     QString m_pendingHighlight;
     bool m_directoryLoaded = false;
+    bool m_forwardingNavigation = false;
 };

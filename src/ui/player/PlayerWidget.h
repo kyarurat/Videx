@@ -1,12 +1,14 @@
 #pragma once
 #include "app/UiState.h"
 #include <QWidget>
+#include <QStringList>
 class QLabel;
 class QStackedWidget;
 class EmptyState;
 class PlayerControls;
 class ThemeManager;
 class QPushButton;
+class ImagePane;
 
 class PlayerWidget : public QWidget
 {
@@ -23,10 +25,13 @@ public:
     void setPlaybackMedia(PlaybackMedia media);
     void setFullscreen(bool fullscreen);
     void setExplorerVisible(bool visible);
+    QString currentPath() const { return m_currentFile.path; }
+    void prefetchImages(const QStringList& paths);
 signals:
     void openRequested();
     void fullscreenRequested();
     void showExplorerRequested();
+    void imageNavigationRequested(int direction);
 private:
     QLabel* m_title;
     QLabel* m_notice;
@@ -40,4 +45,7 @@ private:
     QString m_directory;
     PlayerControls* m_controls;
     QPushButton* m_showExplorer;
+    ImagePane* m_imagePane;
+    QLabel* m_formatHint;
+    FileDetails m_currentFile;
 };

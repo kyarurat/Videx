@@ -1,0 +1,15 @@
+# Some upstream projects force compiler flags into the shared CMake cache.
+# Preserve the caller's flags so their warning policies do not leak into Videx.
+set(videx_compiler_flag_variables)
+foreach(language C CXX)
+    foreach(suffix "" _DEBUG _RELEASE _RELWITHDEBINFO _MINSIZEREL)
+        set(variable "CMAKE_${language}_FLAGS${suffix}")
+        list(APPEND videx_compiler_flag_variables "${variable}")
+        set("videx_saved_${variable}" "${${variable}}")
+    endforeach()
+endforeach()
+include(${CMAKE_CURRENT_LIST_DIR}/ImageDependencies.cmake)
+include(${CMAKE_CURRENT_LIST_DIR}/HeifDependencies.cmake)
+foreach(variable IN LISTS videx_compiler_flag_variables)
+    set(${variable} "${videx_saved_${variable}}" CACHE STRING "Compiler flags" FORCE)
+endforeach()

@@ -1,0 +1,33 @@
+if(WIN32)
+    if(TARGET videx_raw)
+        get_target_property(videx_raw_uses_openmp videx_raw VIDEX_USES_OPENMP)
+    endif()
+    if(MINGW AND videx_raw_uses_openmp)
+        execute_process(COMMAND "${CMAKE_CXX_COMPILER}" -print-file-name=libgomp-1.dll
+            OUTPUT_VARIABLE videx_openmp_runtime OUTPUT_STRIP_TRAILING_WHITESPACE)
+        if(NOT EXISTS "${videx_openmp_runtime}")
+            message(FATAL_ERROR "OpenMP enabled but libgomp-1.dll was not found beside the compiler")
+        endif()
+        foreach(executable Videx videx_image_checks videx_ui_checks videx_raw_benchmark)
+            if(TARGET ${executable})
+                add_custom_command(TARGET ${executable} POST_BUILD
+                    COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                        "${videx_openmp_runtime}" "$<TARGET_FILE_DIR:${executable}>")
+            endif()
+        endforeach()
+        install(FILES "${videx_openmp_runtime}" DESTINATION ${CMAKE_INSTALL_BINDIR})
+    endif()
+    foreach(dependency Exiv2::exiv2lib heif)
+        get_target_property(dependency_type ${dependency} TYPE)
+        if(dependency_type STREQUAL "SHARED_LIBRARY")
+            foreach(executable Videx videx_image_checks videx_ui_checks)
+                if(TARGET ${executable})
+                    add_custom_command(TARGET ${executable} POST_BUILD
+                        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                            $<TARGET_FILE:${dependency}> $<TARGET_FILE_DIR:${executable}>)
+                endif()
+            endforeach()
+            install(FILES $<TARGET_FILE:${dependency}> DESTINATION ${CMAKE_INSTALL_BINDIR})
+        endif()
+    endforeach()
+endif()

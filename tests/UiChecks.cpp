@@ -283,7 +283,13 @@ int main(int argc, char** argv)
     check(name->text()==files[1] && location->text()==QDir::toNativeSeparators(library+'/'+files[1]), "double click opens file in right panel");
     QKeyEvent key(QEvent::KeyPress,Qt::Key_Up,Qt::NoModifier);
     QApplication::sendEvent(tree,&key);
-    check(name->text()==files[1], "keyboard navigation preserves current media");
+    check(model(tree)->isDir(tree->currentIndex()) ? name->text()==files[1]
+          : name->text()==model(tree)->fileName(tree->currentIndex()), "arrow navigation immediately opens files but preserves media on folders");
+    const auto beforeFolderArrow = name->text();
+    tree->setCurrentIndex(model(tree)->index(1, 0, tree->rootIndex()));
+    QApplication::sendEvent(tree, &key);
+    check(model(tree)->isDir(tree->currentIndex()) && !tree->isExpanded(tree->currentIndex())
+          && name->text() == beforeFolderArrow, "arrow selection of a folder does not open or expand it");
     tree->setCurrentIndex(model(tree)->index(library+'/'+files[0]));
     QKeyEvent enterFile(QEvent::KeyPress,Qt::Key_Return,Qt::NoModifier);
     QApplication::sendEvent(tree,&enterFile);

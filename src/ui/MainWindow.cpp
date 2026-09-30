@@ -23,7 +23,7 @@
 MainWindow::MainWindow(ThemeManager* theme, SettingsService* settings, QWidget* parent)
     : QMainWindow(parent), m_theme(theme), m_settingsService(settings)
 {
-    setWindowTitle(tr("Videx — 视频与图片查看器"));
+    setWindowTitle(tr("Videx — 本地媒体查看器"));
     resize(1200,760); setMinimumSize(900,600);
     m_settings = settings->loadPreferences();
     m_theme->setMode(m_settings.theme);
@@ -43,7 +43,7 @@ MainWindow::MainWindow(ThemeManager* theme, SettingsService* settings, QWidget* 
     m_status->setTextFormat(Qt::PlainText);
     m_status->setMinimumWidth(0);
     m_status->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    m_modeLabel = new QLabel(tr("文件信息 · 暂不播放媒体"),this);
+    m_modeLabel = new QLabel(tr("图片查看 · 音视频尚未接入"),this);
     statusBar()->setSizeGripEnabled(true);
     statusBar()->addWidget(m_status,1); statusBar()->addPermanentWidget(m_modeLabel);
     createMenus();
@@ -54,6 +54,12 @@ MainWindow::MainWindow(ThemeManager* theme, SettingsService* settings, QWidget* 
     connect(m_explorer,&ExplorerWidget::fileOpenRequested,m_browser,&BrowserController::selectFile);
     connect(m_explorer,&ExplorerWidget::hideRequested,this,[this] { m_explorerAction->setChecked(false); });
     connect(m_player,&PlayerWidget::showExplorerRequested,this,[this] { m_explorerAction->setChecked(true); });
+    connect(m_player,&PlayerWidget::imageNavigationRequested,this,[this](int direction) {
+        m_explorer->navigateImage(m_player->currentPath(), direction);
+    });
+    connect(m_explorer, &ExplorerWidget::contentsReady, this, [this] {
+        m_player->prefetchImages(m_explorer->adjacentImages(m_player->currentPath()));
+    });
     connect(m_browser,&BrowserController::directoryChanged,this,[this](const QString& path) {
         if (path.isEmpty()) m_explorer->clearDirectory();
         else m_explorer->setDirectory(path);
@@ -64,6 +70,7 @@ MainWindow::MainWindow(ThemeManager* theme, SettingsService* settings, QWidget* 
     connect(m_browser,&BrowserController::fileChanged,this,[this](const FileDetails& details) {
         m_player->setFile(details);
         if (!details.path.isEmpty()) m_explorer->highlightFile(details.path);
+        m_player->prefetchImages(m_explorer->adjacentImages(details.path));
         m_status->setText(details.path.isEmpty() ? tr("已打开 · %1").arg(QDir::toNativeSeparators(m_browser->directory()))
                                                : tr("已选择 · %1").arg(details.name));
         m_status->setToolTip(QDir::toNativeSeparators(details.path.isEmpty() ? m_browser->directory() : details.path));
