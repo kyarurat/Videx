@@ -32,6 +32,7 @@
 #include <QSettings>
 #include <QStatusBar>
 #include <QSplitter>
+#include <QPersistentModelIndex>
 #include <functional>
 
 namespace {
@@ -71,9 +72,14 @@ void capture(QWidget* widget, const QString& path)
 }
 void doubleClick(QTreeView* tree, const QModelIndex& index)
 {
-    tree->scrollTo(index);
+    const QPersistentModelIndex target(index);
+    tree->scrollTo(target);
     QApplication::processEvents();
-    const QPointF position=tree->visualRect(index).center();
+    // Directory population can sort rows while processing events. Keep the
+    // same node and commit the view layout before calculating click geometry.
+    tree->doItemsLayout();
+    tree->scrollTo(target);
+    const QPointF position=tree->visualRect(target).center();
     const QPointF global=tree->viewport()->mapToGlobal(position.toPoint());
     for (auto type : {QEvent::MouseButtonPress,QEvent::MouseButtonRelease,QEvent::MouseButtonDblClick,QEvent::MouseButtonRelease}) {
         QMouseEvent event(type,position,global,Qt::LeftButton,
@@ -443,10 +449,10 @@ int main(int argc, char** argv)
         check(tree->currentIndex()==other && name->text()=="external-change.txt", "background refresh preserves tree selection and opened file");
         QObject::disconnect(refreshConnection);
         check(QFile::rename(changed,renamed), "rename file externally");
-        check(waitFor([&] { return name->text().isEmpty() && notice->isVisible(); }), "external rename invalidates metadata without another selection");
+        check(waitFor([&] { return name->text()=="external-renamed.txt" && !notice->isVisible(); }), "external rename follows file identity without another selection");
         check(window.openPath(renamed), "select renamed file");
         check(QFile::remove(renamed), "delete file externally");
-        check(waitFor([&] { return name->text().isEmpty() && notice->isVisible(); }), "external deletion invalidates metadata without another selection");
+        check(waitFor([&] { return name->text().isEmpty() && !notice->isVisible(); }), "external deletion clears metadata without a viewer error banner");
         check(window.openPath(nestedFile), "switch to another watched file");
         check(window.openDirectory(library), "changing directory clears old watcher");
         writeFile(nestedFile);

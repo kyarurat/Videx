@@ -96,8 +96,9 @@ ImagePane::ImagePane(QWidget* parent) : QWidget(parent), m_loader(new ImageLoade
         }
         const auto metadata = m_result.metadata;
         m_result = result;
-        if (upgrade) m_result.metadata = metadata;
-        else m_metadataPending = result.status == ImageResult::Status::Ready;
+        if (upgrade) {
+            if (!metadata.isEmpty()) m_result.metadata = metadata;
+        } else m_metadataPending = result.status == ImageResult::Status::Ready;
         if (result.status != ImageResult::Status::Ready) {
             if (!upgrade) emit failed(result.message.isEmpty() ? tr("格式不支持") : result.message);
             return;
@@ -110,6 +111,7 @@ ImagePane::ImagePane(QWidget* parent) : QWidget(parent), m_loader(new ImageLoade
         // The view owns its display data; release the additional decoded image.
         m_result.image = {};
     });
+    connect(m_loader, &ImageLoader::accessInterrupted, this, &ImagePane::accessInterrupted);
     connect(m_loader, &ImageLoader::metadataLoaded, this, [this](const QList<ImageMetadataEntry>& entries) {
         m_result.metadata.append(entries);
         m_metadataPending = false;
@@ -152,6 +154,18 @@ void ImagePane::open(const QString& path, bool reload)
 
 void ImagePane::prefetch(const QStringList& paths) { m_loader->prefetch(paths); }
 
+void ImagePane::relocate(const QString& path)
+{
+    const auto oldPath = m_path;
+    m_path = path;
+    m_result.metadata.clear();
+    m_metadataPending = true;
+    if (m_details) {
+        if (auto* title = m_details->findChild<QLabel*>("imageDetailsName")) title->setText(QFileInfo(path).fileName());
+    }
+    m_loader->relocate(oldPath, path);
+}
+
 void ImagePane::showDetails()
 {
     if (m_details) { m_details->raise(); m_details->activateWindow(); return; }
@@ -163,6 +177,7 @@ void ImagePane::showDetails()
     m_details = dialog;
     auto* layout = new QVBoxLayout(dialog);
     auto* title = new QLabel(QFileInfo(m_path).fileName(), dialog);
+    title->setObjectName("imageDetailsName");
     title->setTextFormat(Qt::PlainText);
     title->setWordWrap(true);
     layout->addWidget(title);

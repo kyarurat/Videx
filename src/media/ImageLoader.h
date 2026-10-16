@@ -1,5 +1,6 @@
 #pragma once
 #include "ImageDecoder.h"
+#include "services/FileIdentity.h"
 #include <QFutureWatcher>
 #include <QObject>
 #include <QThreadPool>
@@ -20,15 +21,18 @@ public:
     void prefetch(const QStringList& paths);
     bool isCached(const QString& path);
     void clear();
+    void relocate(const QString& oldPath, const QString& newPath);
 signals:
     void loaded(const ImageResult& result);
     void metadataLoaded(const QList<ImageMetadataEntry>& metadata);
+    void accessInterrupted();
 private:
     struct CachedImage {
         ImageResult result;
         qint64 fileSize;
         QDateTime modified;
         int cost;
+        FileIdentity identity;
     };
     struct Job {
         QFutureWatcher<ImageResult> watcher;
@@ -38,11 +42,13 @@ private:
         QDateTime modified;
         bool running = false;
         QSize targetSize;
+        FileIdentity identity;
     };
     struct CachedMetadata {
         QList<ImageMetadataEntry> entries;
         qint64 size;
         QDateTime modified;
+        FileIdentity identity;
     };
     CachedImage* cached(const QString& path);
     void startPending();
@@ -54,7 +60,8 @@ private:
     QThreadPool m_metadataPool;
     Job m_foreground;
     Job m_background;
-    QFutureWatcher<QList<ImageMetadataEntry>> m_metadataWatcher;
+    struct MetadataResult { QList<ImageMetadataEntry> entries; bool interrupted = false; bool available = true; };
+    QFutureWatcher<MetadataResult> m_metadataWatcher;
     Decode m_decode;
     ReadMetadata m_readMetadata;
     QCache<QString, CachedImage> m_cache{256 * 1024}; // KiB of decoded data
@@ -70,6 +77,7 @@ private:
     bool m_originalRequested = false;
     bool m_originalSpeculative = false;
     bool m_metadataDelivered = false;
+    std::shared_ptr<std::atomic_bool> m_metadataCancelled;
     QSize m_currentSourceSize;
     bool m_currentFullResolution = false;
 };

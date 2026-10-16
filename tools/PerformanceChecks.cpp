@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cmath>
 #include <QFileInfo>
+#include <QtConcurrentRun>
 
 namespace {
 bool waitFor(const std::function<bool()>& ready, int timeout = 60000)
@@ -107,6 +108,18 @@ int main(int argc, char** argv)
     widget->mediaNavigationRequested(1);
     if (!waitFor([&] { return widget->currentPath() == next && player->state().loaded; })) return 1;
     qInfo() << "Navigate across nonmedia_ms:" << elapsed.elapsed() << "maximum_gui_gap_ms:" << maximumGap;
+
+    // A large-directory rename requires an identity search. Run the operation
+    // outside the GUI thread so Windows can deliver its access notification.
+    const auto renamed = directory.filePath("renamed.wav");
+    maximumGap = 0;
+    sinceBeat.restart();
+    elapsed.restart();
+    auto rename = QtConcurrent::run([next, renamed] { return QFile::rename(next, renamed); });
+    if (!waitFor([&] { return rename.isFinished() && widget->currentPath() == renamed
+        && player->state().loaded && !player->state().suspended && !player->state().restoring; })
+        || !rename.result()) return 1;
+    qInfo() << "Rename identity_search_and_restore_ms:" << elapsed.elapsed() << "maximum_gui_gap_ms:" << maximumGap;
 
     // A caller may supply a real multi-GB media file, including valid sparse
     // PCM silence. This does not measure cold disk caches or compressed GOPs.

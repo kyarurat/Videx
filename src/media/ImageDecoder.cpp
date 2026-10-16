@@ -1,6 +1,8 @@
 #include "ImageDecoder.h"
 #include "HeifDecoder.h"
 #include "RawProcessing.h"
+#include "ImageReadSnapshot.h"
+#include <QBuffer>
 #include <QColorSpace>
 #include <QCoreApplication>
 #include <QFile>
@@ -30,7 +32,7 @@ bool validSize(QSize size)
         && qint64(size.width()) * size.height() <= maximumPixels;
 }
 
-void readMetadata(const QString& path, ImageResult& result)
+void readMetadata(const QByteArray& bytes, ImageResult& result)
 {
     // Function-local initialization is serialized even with multiple loaders.
     // Loaders join their workers before process shutdown destroys this runtime.
@@ -39,13 +41,8 @@ void readMetadata(const QString& path, ImageResult& result)
         ~XmpRuntime() { Exiv2::XmpParser::terminate(); }
     };
     static const XmpRuntime xmpRuntime;
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly) || file.size() > maximumFileBytes) return;
-    // A mapped read supports Unicode paths on every platform; no file is modified.
-    auto* bytes = file.map(0, file.size());
-    if (!bytes) return;
     try {
-        auto source = Exiv2::ImageFactory::open(bytes, static_cast<size_t>(file.size()));
+        auto source = Exiv2::ImageFactory::open(reinterpret_cast<const Exiv2::byte*>(bytes.constData()), static_cast<size_t>(bytes.size()));
         if (source) {
             source->readMetadata();
             const auto& exif = source->exifData();
@@ -112,7 +109,6 @@ void readMetadata(const QString& path, ImageResult& result)
         // Metadata failure must not prevent viewing a successfully decoded image.
         result.metadata.append({tr("拍摄信息"), tr("此文件没有可读取的 EXIF/IPTC 信息。")});
     }
-    file.unmap(bytes);
 }
 
 int rawProgress(void* context, enum LibRaw_progress, int, int)
@@ -132,15 +128,6 @@ std::unique_ptr<LibRaw> makeRawDecoder(const std::shared_ptr<std::atomic_bool>& 
     return raw;
 }
 
-int openRawFile(LibRaw& raw, const QString& path)
-{
-#ifdef Q_OS_WIN
-    return raw.open_file(reinterpret_cast<const wchar_t*>(path.utf16()));
-#else
-    const auto filename = QFile::encodeName(path);
-    return raw.open_file(filename.constData());
-#endif
-}
 }
 
 QStringList ImageDecoder::supportedExtensions()
@@ -164,10 +151,15 @@ bool ImageDecoder::isImageCandidate(const QString& path)
     return extensions.contains(QFileInfo(path).suffix().toLower());
 }
 
-QList<ImageMetadataEntry> ImageDecoder::photographicMetadata(const QString& path)
+QList<ImageMetadataEntry> ImageDecoder::photographicMetadata(const QString& path,
+    const std::shared_ptr<std::atomic_bool>& cancelled, bool* interrupted, bool* available)
 {
     ImageResult result;
-    readMetadata(path, result);
+    ImageReadSnapshot snapshot;
+    const bool ready = snapshot.read(path, cancelled);
+    if (ready) readMetadata(snapshot.bytes(), result);
+    if (available) *available = ready;
+    if (interrupted) *interrupted = snapshot.interrupted;
     return result.metadata;
 }
 
@@ -195,11 +187,18 @@ ImageResult ImageDecoder::decode(const QString& path, const std::shared_ptr<std:
     }
     if (cancelled->load()) { result.status = ImageResult::Status::Cancelled; return result; }
     const auto suffix = info.suffix().toLower();
-    QFile probe(path);
-    if (!probe.open(QIODevice::ReadOnly)) return fail(tr("无法读取图片。"));
-    const auto header = probe.read(128);
-    probe.close();
-    QImageReader reader(path);
+    ImageReadSnapshot snapshot;
+    if (!snapshot.read(path, cancelled)) {
+        if (cancelled->load()) { result.status = ImageResult::Status::Cancelled; return result; }
+        if (snapshot.interrupted) { result.status = ImageResult::Status::Interrupted; return result; }
+        if (snapshot.sourceChanged) { result.status = ImageResult::Status::Cancelled; return result; }
+        return fail(snapshot.error);
+    }
+    auto bytes = snapshot.bytes();
+    const auto header = bytes.left(128);
+    QBuffer buffer(&bytes);
+    buffer.open(QIODevice::ReadOnly);
+    QImageReader reader(&buffer);
     reader.setAutoTransform(true);
     reader.setDecideFormatFromContent(true);
     const bool rawCandidate = rawExtensions.contains(suffix);
@@ -211,12 +210,12 @@ ImageResult ImageDecoder::decode(const QString& path, const std::shared_ptr<std:
         // TIFF can contain a RAW sensor image or just its preview. Identify
         // the contents before Qt consumes the first IFD, regardless of suffix.
         identifiedRaw = makeRawDecoder(cancelled);
-        preferRaw = openRawFile(*identifiedRaw, path) == LIBRAW_SUCCESS
+        preferRaw = identifiedRaw->open_buffer(const_cast<char*>(bytes.constData()), bytes.size()) == LIBRAW_SUCCESS
             && identifiedRaw->imgdata.idata.raw_count > 0;
         if (!preferRaw) identifiedRaw.reset();
     }
     if (HeifDecoder::recognizes(header)) {
-        result = HeifDecoder::decode(path, cancelled, targetSize);
+        result = HeifDecoder::decode(bytes, cancelled, targetSize);
         if (result.status != ImageResult::Status::Ready) return result;
     } else if (!preferRaw && qtReadable) {
         result.originalSize = reader.size();
@@ -236,7 +235,7 @@ ImageResult ImageDecoder::decode(const QString& path, const std::shared_ptr<std:
         for (const auto& key : result.image.textKeys())
             result.metadata.append({key.left(256), result.image.text(key).left(4096)});
     } else if (suffix == "svg" || suffix == "svgz") {
-        QSvgRenderer svg(path);
+        QSvgRenderer svg(bytes);
         if (!svg.isValid()) return fail(tr("无法读取 SVG 图片。"));
         result.originalSize = svg.defaultSize();
         if (!validSize(result.originalSize)) return fail(tr("SVG 尺寸无效或过大。"));
@@ -251,7 +250,7 @@ ImageResult ImageDecoder::decode(const QString& path, const std::shared_ptr<std:
         const bool alreadyOpened = bool(identifiedRaw);
         if (!identifiedRaw) identifiedRaw = makeRawDecoder(cancelled);
         auto& raw = *identifiedRaw;
-        int error = alreadyOpened ? LIBRAW_SUCCESS : openRawFile(raw, path);
+        int error = alreadyOpened ? LIBRAW_SUCCESS : raw.open_buffer(const_cast<char*>(bytes.constData()), bytes.size());
         if (error != LIBRAW_SUCCESS) {
             if (rawCandidate && error == LIBRAW_FILE_UNSUPPORTED) {
                 result.message = tr("格式不支持");
@@ -313,7 +312,7 @@ ImageResult ImageDecoder::decode(const QString& path, const std::shared_ptr<std:
     if (result.image.colorSpace().isValid()) result.image.convertToColorSpace(QColorSpace::SRgb);
     result.image = result.image.convertToFormat(result.image.hasAlphaChannel()
         ? QImage::Format_ARGB32_Premultiplied : QImage::Format_RGB32);
-    if (includeMetadata) readMetadata(path, result);
+    if (includeMetadata) readMetadata(bytes, result);
     result.status = ImageResult::Status::Ready;
     return result;
 }

@@ -1,4 +1,5 @@
 #include "HeifDecoder.h"
+#include "ImageReadSnapshot.h"
 #include <QColorSpace>
 #include <QCoreApplication>
 #include <QFile>
@@ -19,17 +20,26 @@ bool HeifDecoder::recognizes(const QByteArray& header)
 
 ImageResult HeifDecoder::decode(const QString& path, const std::shared_ptr<std::atomic_bool>& cancelled, QSize targetSize)
 {
+    ImageReadSnapshot snapshot;
+    if (!snapshot.read(path, cancelled)) {
+        ImageResult result;
+        result.status = cancelled->load() ? ImageResult::Status::Cancelled : ImageResult::Status::Failed;
+        if (snapshot.interrupted) result.status = ImageResult::Status::Interrupted;
+        result.message = snapshot.error;
+        return result;
+    }
+    return decode(snapshot.bytes(), cancelled, targetSize);
+}
+
+ImageResult HeifDecoder::decode(const QByteArray& bytes, const std::shared_ptr<std::atomic_bool>& cancelled, QSize targetSize)
+{
     ImageResult result;
     result.status = ImageResult::Status::Failed;
     result.message = QCoreApplication::translate("ImageDecoder", "无法读取 HEIC/AVIF 图片。");
-    QFile file(path);
-    if (!file.open(QIODevice::ReadOnly)) return result;
-    auto* data = file.map(0, file.size());
-    if (!data) return result;
     std::unique_ptr<heif_context, decltype(&heif_context_free)> context(heif_context_alloc(), &heif_context_free);
     if (!context) return result;
     heif_context_set_max_decoding_threads(context.get(), 2);
-    auto error = heif_context_read_from_memory_without_copy(context.get(), data, static_cast<size_t>(file.size()), nullptr);
+    auto error = heif_context_read_from_memory_without_copy(context.get(), bytes.constData(), static_cast<size_t>(bytes.size()), nullptr);
     if (error.code != heif_error_Ok) return result;
     heif_image_handle* rawHandle = nullptr;
     error = heif_context_get_primary_image_handle(context.get(), &rawHandle);

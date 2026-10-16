@@ -1,6 +1,7 @@
 #pragma once
 #include <QOpenGLWidget>
 #include <QPointer>
+#include <QImage>
 class MpvPlayer;
 
 // Qt owns the OpenGL context and framebuffer; libmpv stays behind MpvPlayer.
@@ -16,5 +17,7 @@ protected:
 private:
     void prepareRenderer();
     void releaseRenderer();
+    void freezeFrame();
     QPointer<MpvPlayer> m_player;
+    QImage m_frozenFrame;
 };

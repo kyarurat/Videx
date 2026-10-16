@@ -17,9 +17,11 @@ public:
     void open(const QString& path, bool reload = false);
     void prefetch(const QStringList& paths);
     void clear();
+    void relocate(const QString& path);
 signals:
     void failed(const QString& message);
     void navigationRequested(int direction);
+    void accessInterrupted();
 private:
     void resetView();
     void showDetails();

@@ -186,7 +186,10 @@ int main(int argc, char** argv)
     auto* model = qobject_cast<QFileSystemModel*>(tree->model());
     check(waitFor([&] { return model->rowCount(tree->rootIndex()) >= 2; }), "audio directory is populated");
     tree->setCurrentIndex(model->index(audio));
+    window.raise();
+    window.activateWindow();
     tree->setFocus();
+    check(waitFor([&] { return QApplication::focusWidget() == tree; }), "file tree receives focus before keyboard navigation");
     QKeyEvent treeDown(QEvent::KeyPress, Qt::Key_Down, Qt::NoModifier);
     QApplication::sendEvent(tree, &treeDown);
     check(waitFor([&] { return widget->currentPath() == otherAudio && player->state().loaded; }), "file tree arrow opens adjacent audio");
@@ -205,14 +208,21 @@ int main(int argc, char** argv)
     check(waitFor([&] { return std::abs(player->state().position - 6) < 0.2; }), "tree short Right seeks five seconds");
     treeKey(QEvent::KeyPress, Qt::Key_Left, true);
     treeKey(QEvent::KeyRelease, Qt::Key_Left, true);
-    check(waitFor([&] { return std::abs(player->state().position - 5) < 0.2; }), "tree repeated Left seeks one second");
+    const bool repeatedLeft = waitFor([&] { return std::abs(player->state().position - 5) < 0.2; });
+    if (!repeatedLeft) qWarning() << "Repeated Left observed position:" << player->state().position
+        << "paused:" << player->state().paused << "suspended:" << player->state().suspended;
+    check(repeatedLeft, "tree repeated Left seeks one second");
     treeKey(QEvent::KeyPress, Qt::Key_Left);
     treeKey(QEvent::KeyRelease, Qt::Key_Left);
     check(waitFor([&] { return player->state().position < 0.3; }), "tree short Left seeks five seconds");
     player->seek(9);
     check(waitFor([&] { return std::abs(player->state().position - 9) < 0.2; }), "prepare complete Left hold sequence");
     treeKey(QEvent::KeyPress, Qt::Key_Left);
-    check(waitFor([&] { return std::abs(player->state().position - 8) < 0.2; }, 1000), "initial held Left step moves one second");
+    const bool initialHeldLeft = waitFor([&] { return std::abs(player->state().position - 8) < 0.2; });
+    if (!initialHeldLeft) qWarning() << "Held Left observed position:" << player->state().position
+        << "paused:" << player->state().paused << "suspended:" << player->state().suspended
+        << "tree focus:" << tree->hasFocus() << "selected:" << model->filePath(tree->currentIndex());
+    check(initialHeldLeft, "initial held Left step moves one second");
     treeKey(QEvent::KeyRelease, Qt::Key_Left, true);
     treeKey(QEvent::KeyPress, Qt::Key_Left, true);
     check(waitFor([&] { return std::abs(player->state().position - 7) < 0.2; }), "subsequent held Left step moves one second");
@@ -264,8 +274,13 @@ int main(int argc, char** argv)
     check(window.openPath(otherAudio), "switch audio session");
     check(waitFor([&] { return player->state().loaded && player->state().title.contains("2"); }), "replacement session loads");
     check(completions == 0, "manual switching does not complete old media");
+    const double rateBeforeEnd = player->state().rate;
+    widget->handleSeekKey(1, true, false);
+    check(waitFor([&] { return player->state().rate == 2.0; }), "hold acceleration before natural end");
     player->seek(11.8);
     check(waitFor([&] { return player->state().ended; }), "natural end keeps loaded session");
+    check(waitFor([&] { return player->state().rate == rateBeforeEnd; }), "natural end cancels held acceleration and restores rate");
+    widget->handleSeekKey(1, false, false);
     check(completions == 1, "natural end emits once");
     player->togglePause();
     check(waitFor([&] { return !player->state().ended && player->state().position < 2 && !player->state().paused; }), "play at end restarts media");
@@ -273,7 +288,10 @@ int main(int argc, char** argv)
     check(waitFor([&] { return player->state().loaded; }), "first auto-next session loads");
     widget->applyPlaybackPreferences(1.0, true);
     player->seek(11.8);
-    check(waitFor([&] { return widget->currentPath() == otherAudio && player->state().loaded; }), "natural end advances to same-category next file");
+    const bool advanced = waitFor([&] { return widget->currentPath() == otherAudio && player->state().loaded; });
+    if (!advanced) qWarning() << "Auto-next state:" << widget->currentPath() << player->state().loaded
+        << player->state().paused << player->state().ended << player->state().position << player->state().duration;
+    check(advanced, "natural end advances to same-category next file");
     check(waitFor([&] { return player->state().muted; }), "auto-next preserves mute");
     player->seek(11.8);
     check(waitFor([&] { return player->state().ended; }), "sequence end stops without wrapping");
@@ -351,15 +369,22 @@ int main(int argc, char** argv)
         QApplication::processEvents();
         waitFor([&] { return player->state().position > 2.5; });
         auto* view = window.findChild<QOpenGLWidget*>("videoSurface");
-        const QImage frame = view ? view->grabFramebuffer() : QImage{};
-        int colorful = 0;
-        for (int y = 0; y < frame.height(); y += 8)
-            for (int x = 0; x < frame.width(); x += 8) {
-                const auto color = frame.pixelColor(x, y);
-                if (qMax(color.red(), qMax(color.green(), color.blue())) - qMin(color.red(), qMin(color.green(), color.blue())) > 80) ++colorful;
-            }
-        check(colorful > 100, "video framebuffer contains rendered test colors");
-        if (view) view->grabFramebuffer().save("artifacts/playback-frame.png");
+        QImage frame;
+        const bool renderedColors = waitFor([&] {
+            frame = view ? view->grabFramebuffer() : QImage{};
+            int colorful = 0;
+            for (int y = 0; y < frame.height(); y += 8)
+                for (int x = 0; x < frame.width(); x += 8) {
+                    const auto color = frame.pixelColor(x, y);
+                    if (qMax(color.red(), qMax(color.green(), color.blue())) - qMin(color.red(), qMin(color.green(), color.blue())) > 80) ++colorful;
+                }
+            return colorful > 100;
+        });
+        if (!renderedColors) qWarning() << "Black frame:" << frame.size() << "visible:" << (view && view->isVisible())
+            << "valid:" << (view && view->isValid()) << "minimized:" << window.isMinimized() << "active:" << window.isActiveWindow()
+            << "position:" << player->state().position << "suspended:" << player->state().suspended;
+        check(renderedColors, "video framebuffer contains rendered test colors after repaint");
+        frame.save("artifacts/playback-frame.png");
         window.grab().save("artifacts/playback-dark.png");
         for (auto* action : window.findChildren<QAction*>()) {
             if (action->shortcut() == QKeySequence(QStringLiteral("F"))) {

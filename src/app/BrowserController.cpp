@@ -1,20 +1,25 @@
 #include "BrowserController.h"
 #include "services/SettingsService.h"
+#include "services/SelectedFileMonitor.h"
 #include <QFileInfo>
 #include <QDir>
 #include <QDebug>
 #include <QFileSystemWatcher>
 
 BrowserController::BrowserController(SettingsService* settings, QObject* parent)
-    : QObject(parent), m_settings(settings), m_watcher(new QFileSystemWatcher(this)),
+    : QObject(parent), m_settings(settings), m_monitor(new SelectedFileMonitor(this)),
       m_rootWatcher(new QFileSystemWatcher(this))
 {
-    connect(m_watcher, &QFileSystemWatcher::fileChanged, this, [this](const QString& path) {
-        if (path == m_selectedFile) refreshSelectedFile();
+    connect(m_monitor, &SelectedFileMonitor::relocated, this, [this](const FileDetails& details) {
+        m_selectedFile = details.path;
+        emit fileRelocated(details);
     });
-    connect(m_watcher, &QFileSystemWatcher::directoryChanged, this, [this](const QString&) {
-        if (!m_selectedFile.isEmpty() && !QFileInfo(m_selectedFile).isFile())
-            selectFile(m_selectedFile);
+    connect(m_monitor, &SelectedFileMonitor::changed, this, [this](const FileDetails& details) {
+        emit fileContentsChanged(details);
+        if (!m_selectedFile.isEmpty()) emit fileDetailsRefreshed(details);
+    });
+    connect(m_monitor, &SelectedFileMonitor::unavailable, this, [this] {
+        dismissFile(m_selectedFile, tr("文件已被删除或移出当前文件夹。"));
     });
     connect(m_rootWatcher, &QFileSystemWatcher::directoryChanged, this, &BrowserController::checkRootDirectory);
 }
@@ -33,23 +38,18 @@ void BrowserController::checkRootDirectory()
                            .arg(QDir::toNativeSeparators(missingDirectory)));
 }
 
-void BrowserController::refreshSelectedFile()
-{
-    checkRootDirectory();
-    if (m_selectedFile.isEmpty()) return;
-    const QFileInfo info(m_selectedFile);
-    if (!info.isFile()) { selectFile(m_selectedFile); return; }
-    // Atomic saves may replace the watched inode; re-arm without opening the file again.
-    if (!m_watcher->files().contains(m_selectedFile) && !m_watcher->addPath(m_selectedFile))
-        qWarning() << "Cannot watch selected file:" << m_selectedFile;
-    emit fileDetailsRefreshed({info.absoluteFilePath(), info.fileName(), info.suffix(), info.size(), info.lastModified()});
-}
-
 void BrowserController::clearSelectedFile()
 {
-    const QStringList paths = m_watcher->files() + m_watcher->directories();
-    if (!paths.isEmpty()) m_watcher->removePaths(paths);
+    m_monitor->clear();
     m_selectedFile.clear();
+}
+
+void BrowserController::dismissFile(const QString& path, const QString& message)
+{
+    if (path.isEmpty() || path != m_selectedFile) return;
+    clearSelectedFile();
+    emit fileChanged({});
+    emit statusMessage(message);
 }
 
 void BrowserController::restoreLastDirectory()
@@ -108,9 +108,9 @@ void BrowserController::selectFile(const QString& path)
     }
     clearSelectedFile();
     m_selectedFile = info.absoluteFilePath();
-    const auto failed = m_watcher->addPaths({m_selectedFile, info.absolutePath()});
-    if (!failed.isEmpty()) qWarning() << "Cannot watch selected file paths:" << failed;
-    emit fileChanged({info.absoluteFilePath(), info.fileName(), info.suffix(), info.size(), info.lastModified()});
+    const FileDetails details{info.absoluteFilePath(), info.fileName(), info.suffix(), info.size(), info.lastModified()};
+    m_monitor->watch(details);
+    emit fileChanged(details);
 }
 
 bool BrowserController::openPath(const QString& path)

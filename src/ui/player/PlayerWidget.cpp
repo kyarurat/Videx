@@ -164,6 +164,11 @@ PlayerWidget::PlayerWidget(ThemeManager* theme, QWidget* parent) : QWidget(paren
         m_stack->setCurrentIndex(1);
     });
     connect(m_imagePane, &ImagePane::navigationRequested, this, &PlayerWidget::imageNavigationRequested);
+    connect(m_imagePane, &ImagePane::accessInterrupted, this, [this] {
+        const auto path = m_currentFile.path;
+        setFile({});
+        emit fileInterrupted(path, tr("已停止读取图片，以允许外部程序独占访问。"));
+    });
     layout->addWidget(m_stack,1);
     m_controls = new PlayerControls(theme, this);
     layout->addWidget(m_controls);
@@ -180,6 +185,12 @@ PlayerWidget::PlayerWidget(ThemeManager* theme, QWidget* parent) : QWidget(paren
         setPlaybackMedia(PlaybackMedia::None);
     });
     connect(m_playback, &MpvPlayer::operationFailed, this, &PlayerWidget::setNotice);
+    connect(m_playback, &MpvPlayer::statusMessage, this, &PlayerWidget::statusMessage);
+    connect(m_playback, &MpvPlayer::interrupted, this, [this](const QString& path, const QString& message) {
+        if (path != m_currentFile.path) return;
+        setFile({});
+        emit fileInterrupted(path, message);
+    });
     connect(m_playback, &MpvPlayer::finished, this, [this] {
         if (m_autoNext) emit mediaNavigationRequested(1);
     });
@@ -209,6 +220,7 @@ void PlayerWidget::setFile(const FileDetails& details)
     const auto type = classifyMedia(details.path);
     if (type != MediaType::Video && type != MediaType::Audio) m_playback->stop();
     m_currentFile = details;
+    m_capabilityAnnounced = m_wasSuspended = false;
     m_resolvedCategory = MediaType::Unknown;
     m_audioInfoPath.clear();
     setPlaybackMedia(PlaybackMedia::None);
@@ -250,16 +262,35 @@ void PlayerWidget::setFile(const FileDetails& details)
 
 void PlayerWidget::refreshFileDetails(const FileDetails& details)
 {
-    const bool changed = details.path == m_currentFile.path
-        && (details.size != m_currentFile.size || details.modified != m_currentFile.modified);
     m_currentFile = details;
     m_name->setText(details.name);
     m_path->setText(QDir::toNativeSeparators(details.path));
     m_size->setText(tr("%1（%2 字节）").arg(QLocale().formattedDataSize(details.size), QLocale().toString(details.size)));
     m_type->setText(details.suffix.isEmpty() ? tr("无扩展名") : details.suffix.toUpper());
     m_modified->setText(QLocale().toString(details.modified, QLocale::ShortFormat));
-    const auto type = classifyMedia(details.path);
-    if (changed && !details.path.isEmpty() && type != MediaType::Video && type != MediaType::Audio) {
+}
+
+void PlayerWidget::relocateFile(const FileDetails& details)
+{
+    const auto category = playbackCategory();
+    const bool timed = category == MediaType::Audio || category == MediaType::Video
+        || classifyMedia(m_currentFile.path) == MediaType::Audio || classifyMedia(m_currentFile.path) == MediaType::Video;
+    m_title->setText(details.name);
+    m_title->setToolTip(details.name);
+    refreshFileDetails(details);
+    if (timed) { m_playback->relocate(details.path); syncPlayback(); }
+    else m_imagePane->relocate(details.path);
+}
+
+void PlayerWidget::fileContentsChanged(const FileDetails& details)
+{
+    const auto type = classifyMedia(m_currentFile.path);
+    if (playbackCategory() != MediaType::Unknown || type == MediaType::Audio || type == MediaType::Video) {
+        const auto path = m_currentFile.path;
+        setFile({});
+        emit fileInterrupted(path, tr("文件内容已被外部修改或替换，已停止播放。"));
+    } else {
+        refreshFileDetails(details);
         m_stack->setCurrentWidget(m_imagePane);
         m_imagePane->open(details.path, true);
     }
@@ -309,9 +340,12 @@ void PlayerWidget::handleSeekKey(int direction, bool pressed, bool autoRepeat)
 void PlayerWidget::cancelSeekHold()
 {
     m_seekHoldTimer->stop();
-    if (m_seekHoldActive && m_seekKeyDirection > 0 && m_playback->state().loaded) m_playback->setRate(m_rateBeforeHold);
+    const bool restoreRate = m_seekHoldActive && m_seekKeyDirection > 0 && m_playback->state().loaded;
+    // setRate() emits stateChanged synchronously. Clear the hold before the
+    // resulting syncPlayback() can cancel it again at EOF or while stopping.
     m_seekKeyDirection = 0;
     m_seekHoldActive = false;
+    if (restoreRate) m_playback->setRate(m_rateBeforeHold);
 }
 MediaType PlayerWidget::playbackCategory() const
 {
@@ -326,6 +360,16 @@ void PlayerWidget::syncPlayback()
     emit playbackSeekingEnabledChanged(state.loaded && state.seekable);
     setPlaybackMedia(state.loaded ? (state.video ? PlaybackMedia::Video : PlaybackMedia::Audio) : PlaybackMedia::None);
     if (!state.loaded) return;
+    if (!m_capabilityAnnounced || m_lastAccessProtected != state.accessProtected) {
+        m_capabilityAnnounced = true;
+        m_lastAccessProtected = state.accessProtected;
+        if (!state.accessProtected) emit statusMessage(state.seekable
+            ? tr("此位置不支持独占请求通知；暂停 5 秒后将释放文件读取。")
+            : tr("此位置不支持独占请求通知，且媒体无法恢复进度；继续共享读取，独占访问仅能尽力兼容。"));
+    }
+    if (state.suspended && !m_wasSuspended) emit statusMessage(state.paused
+        ? tr("已暂停并释放文件读取，继续播放时恢复进度。") : tr("正在处理外部文件操作…"));
+    m_wasSuspended = state.suspended;
     const auto category = state.video ? MediaType::Video : MediaType::Audio;
     if (m_resolvedCategory != category) {
         m_resolvedCategory = category;

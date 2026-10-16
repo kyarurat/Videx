@@ -179,15 +179,20 @@ void ExplorerWidget::setDirectory(const QString& path)
             if (!m_pendingHighlight.isEmpty()) {
                 const QString path=m_pendingHighlight;
                 highlightFile(path);
-                m_pendingHighlight.clear();
             }
         }
         m_contentsTimer->start();
     });
     // QFileSystemModel may sort after directoryLoaded. Refresh neighbors once
     // that layout is committed, coalescing signals instead of forcing a sort.
-    connect(m_model, &QAbstractItemModel::layoutChanged, this, [this] { m_contentsTimer->start(); });
-    connect(m_model, &QAbstractItemModel::rowsInserted, this, updateHint);
+    connect(m_model, &QAbstractItemModel::layoutChanged, this, [this] {
+        m_contentsTimer->start();
+        if (!m_pendingHighlight.isEmpty()) highlightFile(m_pendingHighlight);
+    });
+    connect(m_model, &QAbstractItemModel::rowsInserted, this, [this, updateHint] {
+        updateHint();
+        if (!m_pendingHighlight.isEmpty()) highlightFile(m_pendingHighlight);
+    });
     connect(m_model, &QAbstractItemModel::rowsRemoved, this, updateHint);
     m_tree->setRootIndex(m_model->setRootPath(path));
     m_tree->setSortingEnabled(true);
@@ -198,9 +203,10 @@ void ExplorerWidget::setDirectory(const QString& path)
 void ExplorerWidget::highlightFile(const QString& path)
 {
     if (!m_model || path.isEmpty()) return;
-    m_pendingHighlight=m_directoryLoaded ? QString{} : path;
+    m_pendingHighlight=path;
     const auto index=m_model->index(path);
     if (!index.isValid()) return;
+    m_pendingHighlight.clear();
     m_tree->setCurrentIndex(index);
     m_tree->scrollTo(index);
 }

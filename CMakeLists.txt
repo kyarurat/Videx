@@ -12,6 +12,10 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets Svg Concurrent OpenGLW
 include(cmake/ConfigureImageLibraries.cmake)
 include(cmake/ConfigureMpv.cmake)
 set(VIDEX_SOURCES
+    src/services/FileIdentity.cpp src/services/FileIdentity.h
+    src/services/ExternalAccessGuard.cpp src/services/ExternalAccessGuard.h
+    src/services/SelectedFileMonitor.cpp src/services/SelectedFileMonitor.h
+    src/media/ImageReadSnapshot.cpp src/media/ImageReadSnapshot.h
     src/media/MediaType.cpp src/media/MediaType.h
     src/media/PlaybackTime.cpp src/media/PlaybackTime.h
     src/media/MpvPlayer.cpp src/media/MpvPlayer.h
@@ -61,7 +65,7 @@ if(VIDEX_BUILD_BENCHMARKS)
     target_include_directories(videx_raw_benchmark PRIVATE src)
     target_link_libraries(videx_raw_benchmark PRIVATE Qt6::Core VidexRaw)
     add_executable(videx_performance_checks tools/PerformanceChecks.cpp)
-    target_link_libraries(videx_performance_checks PRIVATE videx_ui)
+    target_link_libraries(videx_performance_checks PRIVATE videx_ui Qt6::Concurrent)
 endif()
 if(BUILD_TESTING)
     # Recompile playback connections with assertions; reuse the remaining UI
@@ -70,7 +74,7 @@ if(BUILD_TESTING)
         src/media/MpvPlayer.cpp src/ui/player/VideoView.cpp
         src/ui/player/PlayerWidget.cpp)
     set_target_properties(videx_playback_lifecycle_checks PROPERTIES AUTOMOC OFF)
-    target_link_libraries(videx_playback_lifecycle_checks PRIVATE videx_ui VidexMpv)
+    target_link_libraries(videx_playback_lifecycle_checks PRIVATE videx_ui VidexMpv Qt6::Concurrent)
     target_compile_definitions(videx_playback_lifecycle_checks PRIVATE QT_FORCE_ASSERTS)
     if(MSVC)
         target_compile_options(videx_playback_lifecycle_checks PRIVATE /utf-8 /W4)
@@ -83,12 +87,22 @@ if(BUILD_TESTING)
     target_link_libraries(videx_playback_checks PRIVATE videx_ui)
     add_test(NAME playback_checks COMMAND videx_playback_checks -platform offscreen)
     set_tests_properties(playback_checks PROPERTIES TIMEOUT 120)
+    add_executable(videx_file_operations_checks tests/FileOperationsChecks.cpp)
+    target_link_libraries(videx_file_operations_checks PRIVATE videx_ui)
+    target_compile_definitions(videx_file_operations_checks PRIVATE VIDEX_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    add_test(NAME file_operations_checks COMMAND videx_file_operations_checks -platform offscreen)
+    set_tests_properties(file_operations_checks PROPERTIES TIMEOUT 120)
     add_executable(videx_image_checks tests/ImageChecks.cpp)
     target_link_libraries(videx_image_checks PRIVATE videx_ui Exiv2::exiv2lib)
     target_compile_definitions(videx_image_checks PRIVATE VIDEX_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    set(VIDEX_HEIF_TEST_FILES_DIR "" CACHE PATH "Directory containing libheif example.heic and example.avif test fixtures")
     FetchContent_GetProperties(libheif)
-    if(libheif_POPULATED)
-        target_compile_definitions(videx_image_checks PRIVATE VIDEX_HEIF_TEST_FILES_DIR="${libheif_SOURCE_DIR}/examples")
+    if(libheif_POPULATED AND NOT VIDEX_HEIF_TEST_FILES_DIR)
+        set(VIDEX_HEIF_TEST_FILES_DIR "${libheif_SOURCE_DIR}/examples")
+    endif()
+    if(VIDEX_HEIF_TEST_FILES_DIR)
+        target_compile_definitions(videx_image_checks PRIVATE VIDEX_HEIF_TEST_FILES_DIR="${VIDEX_HEIF_TEST_FILES_DIR}")
+        target_compile_definitions(videx_file_operations_checks PRIVATE VIDEX_HEIF_TEST_FILES_DIR="${VIDEX_HEIF_TEST_FILES_DIR}")
     endif()
     add_test(NAME image_checks COMMAND videx_image_checks -platform offscreen)
     set_tests_properties(image_checks PROPERTIES TIMEOUT 180)
@@ -105,7 +119,7 @@ include(GNUInstallDirs)
 include(cmake/QtImageFormats.cmake)
 include(cmake/ImageRuntime.cmake)
 if(WIN32)
-    foreach(executable Videx videx_image_checks videx_ui_checks videx_playback_checks videx_playback_lifecycle_checks videx_performance_checks)
+    foreach(executable Videx videx_image_checks videx_ui_checks videx_playback_checks videx_playback_lifecycle_checks videx_file_operations_checks videx_performance_checks)
         if(TARGET ${executable})
             add_custom_command(TARGET ${executable} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different "${MPV_RUNTIME}" "$<TARGET_FILE_DIR:${executable}>")

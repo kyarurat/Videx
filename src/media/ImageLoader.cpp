@@ -1,11 +1,12 @@
 #include "ImageLoader.h"
 #include <QtConcurrentRun>
 #include <QFileInfo>
+#include <QTimer>
 
 ImageLoader::ImageLoader(QObject* parent, Decode decode, ReadMetadata metadata)
     : QObject(parent),
       m_decode(std::move(decode)),
-      m_readMetadata(metadata ? std::move(metadata) : ReadMetadata{ImageDecoder::photographicMetadata})
+      m_readMetadata(std::move(metadata))
 {
     // One reserved foreground slot and at most one speculative decode.
     m_pool.setMaxThreadCount(2);
@@ -28,9 +29,15 @@ void ImageLoader::finish(Job& job)
     const auto result = job.watcher.future().takeResult();
     const bool cancelled = job.cancelled->load();
     job.running = false;
+    if (!cancelled && result.status == ImageResult::Status::Cancelled) {
+        // A rename/replacement must finish before reopening the source. The
+        // selected-file monitor normally supplies the new request first.
+        QTimer::singleShot(200, this, &ImageLoader::startPending);
+        return;
+    }
     const QFileInfo info(job.path);
     const bool unchanged = info.isFile() && info.size() == job.size
-        && info.lastModified() == job.modified;
+        && info.lastModified() == job.modified && FileIdentity::read(job.path) == job.identity;
     if (!cancelled && unchanged && result.status == ImageResult::Status::Ready) {
         qint64 bytes = result.image.sizeInBytes();
         for (const auto& entry : result.metadata)
@@ -41,7 +48,7 @@ void ImageLoader::finish(Job& job)
             && priority && cost + priority->cost > m_cache.maxCost();
         const auto* existing = m_cache.object(job.path);
         if (cost <= m_cache.maxCost() && !protectNext && (!existing || !existing->result.fullResolution || result.fullResolution))
-            m_cache.insert(job.path, new CachedImage{result, job.size, job.modified, int(cost)}, int(cost));
+            m_cache.insert(job.path, new CachedImage{result, job.size, job.modified, int(cost), job.identity}, int(cost));
     }
     if (!cancelled && m_requested == job.path && (m_waiting || m_originalRequested)) {
         // Missing files can deliver their error. Changed files must be decoded
@@ -64,6 +71,7 @@ void ImageLoader::finish(Job& job)
 
 void ImageLoader::clear()
 {
+    if (m_metadataCancelled) m_metadataCancelled->store(true);
     ++m_generation;
     m_requested.clear();
     m_prefetch.clear();
@@ -85,7 +93,7 @@ ImageLoader::CachedImage* ImageLoader::cached(const QString& path)
     if (!entry) return nullptr;
     const QFileInfo info(path);
     if (!info.isFile() || !info.isReadable() || info.size() != entry->fileSize
-        || info.lastModified() != entry->modified) {
+        || info.lastModified() != entry->modified || FileIdentity::read(path) != entry->identity) {
         m_cache.remove(path);
         return nullptr;
     }
@@ -94,8 +102,23 @@ ImageLoader::CachedImage* ImageLoader::cached(const QString& path)
 
 bool ImageLoader::isCached(const QString& path) { return cached(path) != nullptr; }
 
+void ImageLoader::relocate(const QString& oldPath, const QString& newPath)
+{
+    if (auto* entry = m_cache.take(oldPath)) {
+        const auto cost = entry->cost;
+        m_cache.insert(newPath, entry, cost);
+    }
+    if (auto* entry = m_metadataCache.take(oldPath)) {
+        qint64 bytes = 0;
+        for (const auto& item : entry->entries) bytes += (item.name.size() + item.value.size()) * 2 + sizeof(item);
+        m_metadataCache.insert(newPath, entry, int((bytes + 1023) / 1024 + 1));
+    }
+    open(newPath, false, m_previewSize);
+}
+
 void ImageLoader::open(const QString& path, bool reload, QSize previewSize)
 {
+    if (m_metadataCancelled) m_metadataCancelled->store(true);
     ++m_generation;
     m_metadataPending = false;
     m_metadataDelivered = false;
@@ -174,6 +197,7 @@ void ImageLoader::start(Job& job, const QString& path, QSize targetSize)
     job.path = path;
     job.size = info.size();
     job.modified = info.lastModified();
+    job.identity = FileIdentity::read(path);
     job.running = true;
     job.targetSize = targetSize;
     job.cancelled = std::make_shared<std::atomic_bool>(false);
@@ -191,6 +215,7 @@ void ImageLoader::start(Job& job, const QString& path, QSize targetSize)
 void ImageLoader::deliver(const ImageResult& result)
 {
     const auto generation = m_generation;
+    if (result.status == ImageResult::Status::Interrupted) { emit accessInterrupted(); return; }
     if (result.status == ImageResult::Status::Ready) {
         m_currentSourceSize = result.sourceSize.isValid() ? result.sourceSize : result.originalSize;
         m_currentFullResolution = result.fullResolution;
@@ -201,7 +226,8 @@ void ImageLoader::deliver(const ImageResult& result)
     m_metadataDelivered = true;
     if (const auto* entry = m_metadataCache.object(m_requested)) {
         const QFileInfo current(m_requested);
-        if (current.size() == entry->size && current.lastModified() == entry->modified) {
+        if (current.size() == entry->size && current.lastModified() == entry->modified
+            && FileIdentity::read(m_requested) == entry->identity) {
             emit metadataLoaded(entry->entries);
             return;
         }
@@ -220,30 +246,39 @@ void ImageLoader::startMetadata()
     const QFileInfo stamp(path);
     const auto size = stamp.size();
     const auto modified = stamp.lastModified();
+    const auto identity = FileIdentity::read(path);
+    m_metadataCancelled = std::make_shared<std::atomic_bool>(false);
+    const auto cancelled = m_metadataCancelled;
     const auto generation = m_generation;
     // There is only one metadata worker; obsolete requests are coalesced rather
     // than queued for every file visited while scrolling.
     disconnect(&m_metadataWatcher, nullptr, this, nullptr);
-    connect(&m_metadataWatcher, &QFutureWatcher<QList<ImageMetadataEntry>>::finished, this,
-            [this, path, size, modified, generation] {
-        const auto entries = m_metadataWatcher.future().takeResult();
+    connect(&m_metadataWatcher, &QFutureWatcher<MetadataResult>::finished, this,
+            [this, path, size, modified, generation, identity] {
+        const auto result = m_metadataWatcher.future().takeResult();
+        const auto& entries = result.entries;
         m_metadataRunning = false;
+        if (generation == m_generation && result.interrupted) { emit accessInterrupted(); return; }
         const QFileInfo current(path);
-        if (generation == m_generation && current.isFile()
-            && current.size() == size && current.lastModified() == modified) {
+        if (generation == m_generation && result.available && current.isFile()
+            && current.size() == size && current.lastModified() == modified && FileIdentity::read(path) == identity) {
             qint64 bytes = 0;
             for (const auto& entry : entries) bytes += sizeof(ImageMetadataEntry) + (entry.name.size() + entry.value.size()) * 2;
             const qint64 cost = (bytes + 1023) / 1024 + 1;
             if (cost <= m_metadataCache.maxCost())
-                m_metadataCache.insert(path, new CachedMetadata{entries, size, modified}, int(cost));
+                m_metadataCache.insert(path, new CachedMetadata{entries, size, modified, identity}, int(cost));
             emit metadataLoaded(entries);
+        } else if (generation == m_generation && !result.available && current.isFile()) {
+            emit metadataLoaded({{tr("拍摄信息"), tr("文件正在变化或暂时无法读取拍摄信息。")}});
         }
         startMetadata();
     });
-    m_metadataWatcher.setFuture(QtConcurrent::run(&m_metadataPool, [path, read = m_readMetadata] {
-        try { return read(path); }
+    m_metadataWatcher.setFuture(QtConcurrent::run(&m_metadataPool, [path, cancelled, read = m_readMetadata] {
+        MetadataResult result;
+        try { result.entries = read ? read(path) : ImageDecoder::photographicMetadata(path, cancelled, &result.interrupted, &result.available); }
         catch (const std::exception&) {
-            return QList<ImageMetadataEntry>{{tr("拍摄信息"), tr("无法读取图片元数据。")}};
+            result.entries = {{tr("拍摄信息"), tr("无法读取图片元数据。")}};
         }
+        return result;
     }));
 }

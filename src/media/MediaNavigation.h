@@ -6,6 +6,7 @@
 #include <optional>
 #include <QCache>
 #include <QDateTime>
+#include "services/FileIdentity.h"
 class MpvPlayer;
 class QTimer;
 
@@ -31,7 +32,7 @@ private:
     MpvPlayer* m_probe;
     QTimer* m_timeout;
     CandidateSource m_candidates;
-    struct CategoryEntry { qint64 size; QDateTime modified; MediaType category; };
+    struct CategoryEntry { qint64 size; QDateTime modified; MediaType category; FileIdentity identity; };
     QCache<QString, CategoryEntry> m_categories{1024};
     QString m_probePath;
     MediaType m_category = MediaType::Unknown;

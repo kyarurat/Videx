@@ -23,6 +23,8 @@ public:
     void setDirectory(const QString& path);
     void setFile(const FileDetails& details);
     void refreshFileDetails(const FileDetails& details);
+    void relocateFile(const FileDetails& details);
+    void fileContentsChanged(const FileDetails& details);
     void setNotice(const QString& message);
     // Set from a loaded playback session, not a selected file's extension.
     // Pausing keeps the current media type; closing playback resets it to None.
@@ -46,6 +48,8 @@ signals:
     void mediaNavigationRequested(int direction);
     void playbackSeekingEnabledChanged(bool enabled);
     void playbackResolved(const QString& path, MediaType category);
+    void fileInterrupted(const QString& path, const QString& message);
+    void statusMessage(const QString& message);
 private:
     bool eventFilter(QObject* watched, QEvent* event) override;
     void syncPlayback();
@@ -58,6 +62,9 @@ private:
     double m_defaultRate = 1;
     double m_volume = 70;
     bool m_autoNext = false;
+    bool m_capabilityAnnounced = false;
+    bool m_lastAccessProtected = false;
+    bool m_wasSuspended = false;
     QTimer* m_seekHoldTimer;
     int m_seekKeyDirection = 0;
     bool m_seekHoldActive = false;

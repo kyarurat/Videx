@@ -102,6 +102,22 @@ MainWindow::MainWindow(ThemeManager* theme, SettingsService* settings, QWidget* 
     });
     connect(m_browser,&BrowserController::errorOccurred,this,&MainWindow::showError);
     connect(m_browser,&BrowserController::fileDetailsRefreshed,m_player,&PlayerWidget::refreshFileDetails);
+    connect(m_browser, &BrowserController::fileRelocated, this, [this](const FileDetails& details) {
+        m_mediaNavigation->cancel();
+        m_player->relocateFile(details);
+        m_explorer->highlightFile(details.path);
+        m_status->setText(tr("已选择 · %1").arg(details.name));
+        m_status->setToolTip(QDir::toNativeSeparators(details.path));
+        m_player->prefetchImages(m_explorer->adjacentImages(details.path));
+    });
+    connect(m_browser, &BrowserController::fileContentsChanged, m_player, &PlayerWidget::fileContentsChanged);
+    connect(m_player, &PlayerWidget::fileInterrupted, m_browser, &BrowserController::dismissFile);
+    const auto statusMessage = [this](const QString& message) {
+        m_status->setText(message);
+        m_status->setToolTip(message);
+    };
+    connect(m_player, &PlayerWidget::statusMessage, this, statusMessage);
+    connect(m_browser, &BrowserController::statusMessage, this, statusMessage);
     connect(m_player,&PlayerWidget::fullscreenRequested,this,&MainWindow::toggleFullscreen);
     m_browser->restoreLastDirectory();
     m_applyingSettings = false;

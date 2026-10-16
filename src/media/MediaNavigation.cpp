@@ -2,6 +2,7 @@
 #include "MpvPlayer.h"
 #include <QTimer>
 #include <QFileInfo>
+#include <QDebug>
 
 MediaNavigation::MediaNavigation(QObject* parent)
     : QObject(parent), m_probe(new MpvPlayer(this)), m_timeout(new QTimer(this))
@@ -29,6 +30,10 @@ MediaNavigation::MediaNavigation(QObject* parent)
     // Retain the existing error path: select an unreadable candidate so the
     // viewer displays its file information and playback error. Never skip it.
     connect(m_probe, &MpvPlayer::failed, this, [this] { selectCandidate(); });
+    connect(m_probe, &MpvPlayer::interrupted, this, [this](const QString&, const QString& message) {
+        cancel();
+        emit failed(message);
+    });
 }
 
 void MediaNavigation::cancel()
@@ -61,7 +66,7 @@ void MediaNavigation::navigate(CandidateSource candidates, MediaType category)
 void MediaNavigation::remember(const QString& path, MediaType category)
 {
     const QFileInfo info(path);
-    if (info.isFile()) m_categories.insert(path, new CategoryEntry{info.size(), info.lastModified(), category});
+    if (info.isFile()) m_categories.insert(path, new CategoryEntry{info.size(), info.lastModified(), category, FileIdentity::read(path)});
 }
 
 void MediaNavigation::queueNext()
@@ -79,10 +84,12 @@ void MediaNavigation::probeNext()
     if (!candidate) { m_candidates = {}; return; }
     if (candidate->isEmpty()) { queueNext(); return; }
     m_probePath = *candidate;
+    if (qEnvironmentVariableIsSet("VIDEX_TRACE_FILE_ACCESS")) qInfo() << "Navigation candidate:" << m_probePath;
     if (m_category == MediaType::Image) { selectCandidate(); return; }
     if (const auto* entry = m_categories.object(m_probePath)) {
         const QFileInfo info(m_probePath);
-        if (info.isFile() && info.size() == entry->size && info.lastModified() == entry->modified) {
+        if (info.isFile() && info.size() == entry->size && info.lastModified() == entry->modified
+            && FileIdentity::read(m_probePath) == entry->identity) {
             if (entry->category == m_category) selectCandidate();
             else { m_probePath.clear(); queueNext(); }
             return;
@@ -97,6 +104,7 @@ void MediaNavigation::selectCandidate()
 {
     if (m_probePath.isEmpty()) return;
     const auto path = m_probePath;
+    if (qEnvironmentVariableIsSet("VIDEX_TRACE_FILE_ACCESS")) qInfo() << "Navigation selected:" << path;
     cancel();
     emit candidateSelected(path);
 }

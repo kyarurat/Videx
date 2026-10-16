@@ -43,6 +43,7 @@ bool makeAudio(const QString& path)
 
 bool checkWidgetDestruction(ThemeManager& theme, const QString& path, bool accelerate)
 {
+    qInfo() << "Destroying player widget:" << QFileInfo(path).fileName() << "accelerated:" << accelerate;
     auto* widget = new PlayerWidget(&theme);
     widget->resize(900, 600);
     widget->show();
@@ -51,8 +52,8 @@ bool checkWidgetDestruction(ThemeManager& theme, const QString& path, bool accel
     if (!path.isEmpty()) {
         const QFileInfo file(path);
         widget->setFile({file.absoluteFilePath(), file.fileName(), file.suffix(), file.size(), file.lastModified()});
-        if (!waitFor([&] { return player->state().loaded; })) {
-            qCritical() << "FAIL: media must load before widget destruction";
+        if (!waitFor([&] { return player->state().loaded && (!accelerate || player->state().seekable); })) {
+            qCritical() << "FAIL: media must load and support the requested controls before widget destruction";
             delete widget;
             return false;
         }
@@ -89,6 +90,7 @@ int main(int argc, char** argv)
         || !checkWidgetDestruction(theme, audio, true)) return 1;
 
     SettingsService settings(temporary.filePath("settings.ini"));
+    qInfo() << "Closing active main window";
     auto* window = new MainWindow(&theme, &settings);
     window->show();
     auto* widget = window->findChild<PlayerWidget*>();
@@ -110,6 +112,7 @@ int main(int argc, char** argv)
     if (!video.isEmpty() && (!checkWidgetDestruction(theme, video, false)
         || !checkWidgetDestruction(theme, video, true))) return 1;
     for (int iteration = 0; iteration < 3; ++iteration) {
+        qInfo() << "Destroying video surface before backend:" << iteration;
         MpvPlayer player;
         auto* view = new VideoView(&player);
         view->resize(640, 360);
@@ -132,6 +135,7 @@ int main(int argc, char** argv)
         delete view;
         player.stop();
     }
+    qInfo() << "Destroying backend before video surface";
     auto* player = new MpvPlayer;
     auto* view = new VideoView(player);
     view->resize(640, 360);

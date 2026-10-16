@@ -24,13 +24,16 @@ if(VIDEX_BUILD_IMAGE_PLUGINS)
             "-DCMAKE_INSTALL_PREFIX=${VIDEX_IMAGE_PLUGIN_PREFIX}"
             -DQT_BUILD_TESTS=OFF -DQT_BUILD_EXAMPLES=OFF
         INSTALL_COMMAND "${CMAKE_COMMAND}" --install <BINARY_DIR> --config Release)
-    foreach(executable Videx videx_image_checks videx_ui_checks videx_playback_checks)
+    # All application/check executables share the runtime directory. Stage once:
+    # concurrent POST_BUILD directory copies can race over the same Windows DLLs.
+    add_custom_target(videx_image_plugins_deploy
+        COMMAND "${CMAKE_COMMAND}" -E copy_directory
+            "${VIDEX_IMAGE_PLUGIN_PREFIX}/plugins/imageformats"
+            "$<TARGET_FILE_DIR:Videx>/imageformats"
+        DEPENDS videx_image_plugins)
+    foreach(executable Videx videx_image_checks videx_ui_checks videx_playback_checks videx_file_operations_checks)
         if(TARGET ${executable})
-            add_dependencies(${executable} videx_image_plugins)
-            add_custom_command(TARGET ${executable} POST_BUILD
-                COMMAND "${CMAKE_COMMAND}" -E copy_directory
-                    "${VIDEX_IMAGE_PLUGIN_PREFIX}/plugins/imageformats"
-                    "$<TARGET_FILE_DIR:${executable}>/imageformats")
+            add_dependencies(${executable} videx_image_plugins_deploy)
         endif()
     endforeach()
     install(DIRECTORY "${VIDEX_IMAGE_PLUGIN_PREFIX}/plugins/imageformats"
