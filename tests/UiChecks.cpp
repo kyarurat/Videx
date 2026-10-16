@@ -1,6 +1,8 @@
 #include "app/ThemeManager.h"
 #include "app/BrowserController.h"
 #include "services/SettingsService.h"
+#include "services/LanguageService.h"
+#include <QTranslator>
 #include "ui/MainWindow.h"
 #include "ui/explorer/ExplorerWidget.h"
 #include "ui/dialogs/SettingsDialog.h"
@@ -12,6 +14,7 @@
 #include <QFileSystemModel>
 #include <QDir>
 #include <QTreeView>
+#include <QScrollBar>
 #include <QLabel>
 #include <QToolButton>
 #include <QPushButton>
@@ -167,6 +170,9 @@ int main(int argc, char** argv)
         if (position < 0) continue;
         if (position + 1 >= args.size()) return 2;
         SettingsService settings(args[position+1]);
+        QTranslator translator;
+        if (operation == "--read-preferences")
+            check(LanguageService::install(translator, settings.loadPreferences().language), "load persisted UI language");
         MainWindow window(&theme, &settings);
         window.showSettings();
         auto* dialog=window.findChild<SettingsDialog*>();
@@ -178,6 +184,7 @@ int main(int argc, char** argv)
             preferences.explorerVisible=false;
             preferences.statusBarVisible=false;
             preferences.defaultRate=1.75;
+            preferences.language="en_US";
             preferences.theme=ThemeMode::Dark;
             dialog->setSettings(preferences);
             dialog->findChild<QPushButton*>("applySettings")->click();
@@ -186,9 +193,19 @@ int main(int argc, char** argv)
             return 0;
         }
         const auto preferences=settings.loadPreferences();
+        if (operation == "--read-preferences") {
+            const auto output = QDir::current().absoluteFilePath("artifacts/browser");
+            QDir().mkpath(output);
+            capture(dialog, output + "/english-settings-general.png");
+            dialog->findChild<QListWidget*>("settingsNavigation")->setCurrentRow(1);
+            capture(dialog, output + "/english-settings-playback.png");
+        }
         return !preferences.restoreDirectory && !preferences.resumePlayback && preferences.autoPlayNext
             && !preferences.explorerVisible && !preferences.statusBarVisible && preferences.defaultRate==1.75
             && preferences.theme==ThemeMode::Dark && theme.mode()==ThemeMode::Dark
+            && preferences.language == "en_US" && dialog->windowTitle() == QStringLiteral("Settings — Videx")
+            && window.windowTitle() == QStringLiteral("Videx — Local Media Viewer")
+            && dialog->findChild<QComboBox*>("language")->currentData().toString() == "en_US"
             && window.findChild<ExplorerWidget*>()->isHidden() && window.statusBar()->isHidden()
             && dialog->findChild<QComboBox*>("themeMode")->currentData().toInt()==int(ThemeMode::Dark) ? 0 : 1;
     }
@@ -529,7 +546,7 @@ int main(int argc, char** argv)
         MainWindow missing(&theme,&stale);
         missing.show();
         check(!missing.findChild<QTreeView*>("fileTree")->model(), "missing saved folder falls back to unopened state");
-        check(!missing.findChild<QLabel*>("browserNotice")->text().isEmpty(), "missing saved folder explains recovery");
+        check(missing.findChild<QLabel*>("browserNotice")->isHidden(), "missing saved folder starts blank without error notice");
         capture(&missing,artifacts+"/missing-folder.png");
     }
     check(window.openDirectory(library), "reopen after failed directory");
@@ -613,6 +630,84 @@ int main(int argc, char** argv)
         QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
         QApplication::sendEvent(entry,&enter);
         check(picker.result()==QDialog::Accepted && picker.selectedPath()==QFileInfo(nestedFile).absolutePath(), "enter accepts folder using same path logic");
+    }
+    {
+        QTemporaryDir treeFixture;
+        const auto root = treeFixture.path();
+        QDir(root).mkpath("branch/nested");
+        const auto leaf = root + "/branch/nested/leaf.txt";
+        writeFile(leaf);
+        for (int i = 0; i < 80; ++i) writeFile(root + "/branch/nested/" + QString::number(i) + ".txt");
+        SettingsService sessionSettings(root + "/session.ini");
+        {
+            MainWindow first(&theme, &sessionSettings);
+            first.show();
+            first.openDirectory(root);
+            auto* tree = first.findChild<QTreeView*>("fileTree");
+            auto* fs = model(tree);
+            check(waitFor([&] { return fs->index(root + "/branch").isValid(); }), "restore fixture branch loaded");
+            tree->expand(fs->index(root + "/branch"));
+            check(waitFor([&] { return fs->index(root + "/branch/nested").isValid(); }), "restore fixture nested branch loaded");
+            tree->expand(fs->index(root + "/branch/nested"));
+            check(waitFor([&] { return fs->index(leaf).isValid(); }), "restore fixture leaf loaded");
+            tree->setCurrentIndex(fs->index(leaf));
+            tree->scrollTo(fs->index(leaf), QAbstractItemView::PositionAtBottom);
+            first.close();
+        }
+        {
+            MainWindow second(&theme, &sessionSettings);
+            second.show();
+            auto* tree = second.findChild<QTreeView*>("fileTree");
+            check(waitFor([&] {
+                auto* fs = model(tree);
+                return fs && tree->isExpanded(fs->index(root + "/branch/nested"))
+                    && fs->filePath(tree->currentIndex()) == leaf
+                    && tree->verticalScrollBar()->value() == sessionSettings.loadSession().scroll;
+            }), "restart restores nested expansion and selected tree row");
+            second.close();
+        }
+    }
+    {
+        SettingsService isolated(fixture.path() + "/all-settings.ini");
+        MainWindow settingsWindow(&theme, &isolated);
+        settingsWindow.showSettings();
+        auto* editor = settingsWindow.findChild<SettingsDialog*>();
+        for (const auto* key : {"restoreDirectory", "resumePlayback", "autoPlayNext", "explorerVisible", "statusBarVisible"}) {
+            auto* choice = editor->findChild<QCheckBox*>(key);
+            choice->setChecked(!choice->isChecked());
+        }
+        auto* language = editor->findChild<QComboBox*>("language");
+        language->setCurrentIndex(language->findData("en_US"));
+        auto* rate = editor->findChild<QComboBox*>("defaultRate");
+        rate->setCurrentIndex(rate->findData(1.75));
+        editor->findChild<QPushButton*>("applySettings")->click();
+        const auto persisted = isolated.loadPreferences();
+        check(!persisted.restoreDirectory && !persisted.resumePlayback && persisted.autoPlayNext
+            && !persisted.explorerVisible && !persisted.statusBarVisible && persisted.language == "en_US"
+            && persisted.defaultRate == 1.75, "every settings control persists its chosen value");
+        language->setCurrentIndex(language->findData("zh_CN"));
+        editor->reject();
+        check(isolated.loadPreferences().language == "en_US", "cancel does not save language draft");
+        settingsWindow.showSettings();
+        check(editor->draft().language == "en_US", "reopening discards cancelled language edits");
+        editor->findChild<QPushButton*>("restoreDefaults")->click();
+        check(editor->draft().language == "zh_CN" && editor->draft().resumePlayback
+            && !editor->draft().autoPlayNext && editor->draft().defaultRate == 1.0,
+            "restore defaults resets language and playback draft");
+        check(isolated.loadPreferences().language == "en_US", "restore defaults waits for Apply");
+        editor->findChild<QPushButton*>("applySettings")->click();
+        check(isolated.loadPreferences().language == "zh_CN" && isolated.loadPreferences().restoreDirectory
+            && isolated.loadPreferences().resumePlayback && isolated.loadPreferences().explorerVisible
+            && isolated.loadPreferences().statusBarVisible && !isolated.loadPreferences().autoPlayNext,
+            "applying defaults persists all options");
+        QSettings invalid(fixture.path() + "/invalid-settings.ini", QSettings::IniFormat);
+        invalid.setValue("appearance/language", "unknown");
+        invalid.setValue("appearance/theme", "invalid");
+        invalid.setValue("playback/defaultRate", -2);
+        invalid.sync();
+        SettingsService safe(invalid.fileName());
+        check(safe.loadPreferences().language == "zh_CN" && safe.loadPreferences().theme == ThemeMode::System
+            && safe.loadPreferences().defaultRate == 1.0, "invalid saved preferences use supported defaults");
     }
     QFile report(artifacts+"/checks.txt");
     if (report.open(QIODevice::WriteOnly|QIODevice::Text)) {

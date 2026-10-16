@@ -4,6 +4,7 @@
 #include "media/MediaType.h"
 #include "media/MediaNavigation.h"
 #include <QSet>
+struct SavedSession;
 class QFileSystemModel;
 class QTreeView;
 class QStackedWidget;
@@ -16,6 +17,8 @@ class ExplorerWidget : public QWidget
 public:
     ExplorerWidget(ThemeManager* theme, QWidget* parent = nullptr);
     ~ExplorerWidget() override;
+    void captureSession(SavedSession& session) const;
+    void restoreSession(const SavedSession& session);
     void setDirectory(const QString& path);
     void clearDirectory();
     void highlightFile(const QString& path);
@@ -33,6 +36,10 @@ signals:
     void playbackSeekRequested(int direction, bool pressed, bool autoRepeat);
     void playbackSeekCancelled();
 private:
+    void applyRestoredTree(bool settled = false);
+    QStringList m_restoreExpanded;
+    QString m_restoreSelection;
+    int m_restoreScroll = -1;
     QFileSystemModel* m_model = nullptr;
     QTreeView* m_tree;
     QStackedWidget* m_stack;

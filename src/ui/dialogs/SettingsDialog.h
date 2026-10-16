@@ -20,6 +20,7 @@ private:
     QCheckBox* m_next;
     QCheckBox* m_explorer;
     QCheckBox* m_status;
+    QComboBox* m_language;
     QComboBox* m_rate;
     QComboBox* m_theme;
     bool m_explorerEdited = false;

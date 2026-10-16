@@ -1,5 +1,14 @@
-# 多语言扩展
+# 界面语言
 
-中文源文案是当前默认语言。使用 Qt Linguist 的 lupdate 提取 src 中的 tr() 文案到 videx_<locale>.ts，经翻译和 lrelease 后将 videx_<locale>.qm 放到可执行程序旁的 translations 目录。
+设置支持简体中文和 English，点击“应用”或“确定”保存；重启软件生效。默认保持简体中文，未知语言配置回退至中文。取消不保存草稿，恢复默认需应用后保存。
 
-入口已持有 QTranslator 并从该目录加载 videx_zh_CN；后续增加语言选择时，将选中语言传入该加载入口即可。当前不承诺运行中切换语言；新增语言可在下一次启动应用时加载。LinguistTools 不作为 GUI 构建的强制依赖。
+英文使用标准 Qt TS/QM 语言包，嵌入应用资源，因此安装包不需要额外 translations 目录。中文使用源文案。已提交 TS 源文件和生成的 QM，普通构建不依赖 LinguistTools。
+
+更新文案后，在安装了 Qt Linguist 工具的环境执行：
+
+```sh
+lupdate src -no-obsolete -ts translations/videx_en_US.ts
+lrelease translations/videx_en_US.ts -qm translations/videx_en_US.qm
+```
+
+翻译新增项，保持占位符完整，再同时提交 TS 和 QM。`LanguageService` 在创建界面之前加载保存的语言；正在打开的窗口不会即时切换语言。

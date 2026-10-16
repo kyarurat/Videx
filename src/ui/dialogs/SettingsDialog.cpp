@@ -31,20 +31,24 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent)
         auto* label = new QLabel(heading,page); label->setProperty("role","section"); rows->addWidget(label);
         pages->addWidget(page); return rows;
     };
-    const auto future = tr("播放进度恢复暂未接入");
     auto* general = makePage(tr("常规偏好"));
     m_restore = new QCheckBox(this);
     m_restore->setObjectName("restoreDirectory");
-    general->addWidget(settingRow(tr("恢复上次目录"),tr("下次启动自动打开上次使用的文件夹。"),m_restore,this));
-    auto* language = new ComboBox(this); language->addItem(tr("简体中文"));
-    general->addWidget(settingRow(tr("语言"),tr("已预留多语言扩展接口。"),language,this));
+    general->addWidget(settingRow(tr("恢复上次目录"),tr("下次启动恢复上次文件夹及文件树状态。"),m_restore,this));
+    m_language = new ComboBox(this);
+    m_language->setObjectName("language");
+    m_language->addItem(QStringLiteral("简体中文"), QStringLiteral("zh_CN"));
+    m_language->addItem(QStringLiteral("English"), QStringLiteral("en_US"));
+    general->addWidget(settingRow(tr("语言"),tr("保存后重启软件，应用所选语言。"),m_language,this));
     general->addStretch();
     auto* playback = makePage(tr("播放偏好"));
     m_resume = new QCheckBox(this); m_next = new QCheckBox(this);
-    m_resume->setEnabled(false);
-    playback->addWidget(settingRow(tr("记住播放进度"),future,m_resume,this));
+    m_resume->setObjectName("resumePlayback");
+    m_next->setObjectName("autoPlayNext");
+    playback->addWidget(settingRow(tr("记住播放进度"),tr("启动时恢复上次文件、播放位置及播放状态。"),m_resume,this));
     playback->addWidget(settingRow(tr("自动播放下一项"),tr("自然播放结束后，继续播放同一文件夹中的同类媒体。"),m_next,this));
     m_rate = new ComboBox(this);
+    m_rate->setObjectName("defaultRate");
     for (double rate : {0.5,0.75,1.0,1.25,1.5,1.75,2.0}) m_rate->addItem(tr("%1×").arg(rate),rate);
     playback->addWidget(settingRow(tr("默认倍速"),tr("打开视频或音频时使用此播放速度。"),m_rate,this));
     playback->addStretch();
@@ -81,6 +85,7 @@ SettingsDialog::SettingsDialog(QWidget* parent) : QDialog(parent)
 }
 void SettingsDialog::setSettings(const SessionSettings& settings)
 {
+    m_language->setCurrentIndex(m_language->findData(settings.language == "en_US" ? "en_US" : "zh_CN"));
     m_restore->setChecked(settings.restoreDirectory); m_resume->setChecked(settings.resumePlayback);
     m_next->setChecked(settings.autoPlayNext); m_explorer->setChecked(settings.explorerVisible);
     m_status->setChecked(settings.statusBarVisible); m_rate->setCurrentIndex(m_rate->findData(settings.defaultRate));
@@ -97,6 +102,7 @@ void SettingsDialog::syncVisibility(bool explorerVisible, bool statusBarVisible)
 SessionSettings SettingsDialog::draft() const
 {
     SessionSettings settings;
+    settings.language = m_language->currentData().toString();
     settings.restoreDirectory=m_restore->isChecked(); settings.resumePlayback=m_resume->isChecked();
     settings.autoPlayNext=m_next->isChecked(); settings.explorerVisible=m_explorer->isChecked();
     settings.statusBarVisible=m_status->isChecked(); settings.defaultRate=m_rate->currentData().toDouble();

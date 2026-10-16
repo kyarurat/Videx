@@ -1,4 +1,6 @@
 #include "ExplorerWidget.h"
+#include "services/SettingsService.h"
+#include <QScrollBar>
 #include "ui/common/UiComponents.h"
 #include <QFileSystemModel>
 #include "media/ImageDecoder.h"
@@ -26,6 +28,8 @@ ExplorerWidget::ExplorerWidget(ThemeManager* theme, QWidget* parent) : QWidget(p
     setMinimumWidth(200);
     m_contentsTimer = new QTimer(this);
     m_contentsTimer->setSingleShot(true);
+    m_contentsTimer->setInterval(50);
+    connect(m_contentsTimer, &QTimer::timeout, this, [this] { applyRestoredTree(true); });
     connect(m_contentsTimer, &QTimer::timeout, this, &ExplorerWidget::contentsReady);
     auto* layout = new QVBoxLayout(this);
     layout->setContentsMargins(0,0,0,0); layout->setSpacing(0);
@@ -143,6 +147,9 @@ void ExplorerWidget::clearDirectory()
     delete selection;
     delete m_model;
     m_model = nullptr;
+    m_restoreExpanded.clear();
+    m_restoreSelection.clear();
+    m_restoreScroll = -1;
     m_directory.clear();
     m_pendingHighlight.clear();
     m_directoryLoaded=false;
@@ -181,6 +188,7 @@ void ExplorerWidget::setDirectory(const QString& path)
                 highlightFile(path);
             }
         }
+        applyRestoredTree();
         m_contentsTimer->start();
     });
     // QFileSystemModel may sort after directoryLoaded. Refresh neighbors once
@@ -257,4 +265,51 @@ MediaNavigation::CandidateSource ExplorerWidget::navigationSource(const QString&
         }
         return QString{};
     };
+}
+
+void ExplorerWidget::captureSession(SavedSession& session) const
+{
+    session.directory = m_directory;
+    if (!m_model) return;
+    session.selection = m_model->filePath(m_tree->currentIndex());
+    session.scroll = m_tree->verticalScrollBar()->value();
+    // Only visit populated, expanded branches; never scan the filesystem.
+    const auto visit = [&](const auto& self, const QModelIndex& parent) -> void {
+        for (int row = 0; row < m_model->rowCount(parent); ++row) {
+            const auto index = m_model->index(row, 0, parent);
+            if (m_model->isDir(index) && m_tree->isExpanded(index)) {
+                session.expanded.append(m_model->filePath(index));
+                self(self, index);
+            }
+        }
+    };
+    visit(visit, m_tree->rootIndex());
+}
+void ExplorerWidget::restoreSession(const SavedSession& session)
+{
+    m_restoreExpanded = session.expanded;
+    m_restoreSelection = session.selection;
+    m_restoreScroll = session.scroll;
+    applyRestoredTree();
+    m_contentsTimer->start();
+}
+void ExplorerWidget::applyRestoredTree(bool settled)
+{
+    if (!m_model || m_restoreScroll < 0) return;
+    for (auto it = m_restoreExpanded.begin(); it != m_restoreExpanded.end();) {
+        const auto relative = QDir(m_directory).relativeFilePath(*it);
+        if (relative == ".." || relative.startsWith("../") || QDir::isAbsolutePath(relative)
+            || !QFileInfo(*it).isDir()) { it = m_restoreExpanded.erase(it); continue; }
+        const auto index = m_model->index(*it);
+        if (!index.isValid()) { ++it; continue; }
+        m_tree->expand(index);
+        if (m_model->canFetchMore(index)) { m_model->fetchMore(index); ++it; }
+        else it = m_restoreExpanded.erase(it);
+    }
+    if (!settled || !m_restoreExpanded.isEmpty() || !m_directoryLoaded) return;
+    const auto index = m_model->index(m_restoreSelection);
+    if (index.isValid()) m_tree->setCurrentIndex(index);
+    m_tree->doItemsLayout();
+    m_tree->verticalScrollBar()->setValue(m_restoreScroll);
+    m_restoreScroll = -1;
 }

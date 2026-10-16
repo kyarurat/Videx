@@ -10,6 +10,7 @@ struct SessionSettings
     bool explorerVisible = true;
     bool statusBarVisible = true;
     double defaultRate = 1.0;
+    QString language = QStringLiteral("zh_CN");
     ThemeMode theme = ThemeMode::System;
 };
 struct FileDetails

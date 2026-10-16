@@ -73,6 +73,55 @@ int main(int argc, char** argv)
     const auto otherAudio = temporary.filePath("2.wav");
     makeAudio(audio);
     makeAudio(otherAudio);
+    {
+        SettingsService saved(temporary.filePath("restart.ini"));
+        SavedSession session;
+        session.directory = temporary.path();
+        session.file = audio;
+        session.selection = audio;
+        session.position = 4.0;
+        session.rate = 1.5;
+        session.volume = 23;
+        session.paused = true;
+        session.muted = true;
+        check(saved.saveSession(session), "save restart session");
+        ThemeManager restartTheme;
+        {
+            MainWindow restored(&restartTheme, &saved);
+            restored.show();
+            auto* backend = restored.findChild<PlayerWidget*>()->findChild<MpvPlayer*>();
+            check(waitFor([&] { return backend->state().loaded && backend->state().position >= 3.9; }), "restart restores playback position");
+            check(backend->state().paused && backend->state().muted
+                && backend->state().rate == 1.5 && backend->state().volume == 23, "restart restores paused rate volume mute");
+            restored.close();
+        }
+        check(saved.loadSession().file == audio && saved.loadSession().position >= 3.9, "close persists restored playback");
+        session.paused = false;
+        saved.saveSession(session);
+        {
+            MainWindow playing(&restartTheme, &saved);
+            auto* backend = playing.findChild<PlayerWidget*>()->findChild<MpvPlayer*>();
+            check(waitFor([&] { return backend->state().loaded && backend->state().position > 4.1
+                && !backend->state().paused; }), "restart resumes playing session");
+            playing.openPath(otherAudio);
+            check(waitFor([&] { return backend->state().loaded && backend->state().position < 2
+                && !backend->state().paused; }), "switching file discards restart position and pause intent");
+        }
+        session.file = temporary.filePath("deleted.wav");
+        saved.saveSession(session);
+        {
+            MainWindow missing(&restartTheme, &saved);
+            check(missing.findChild<ExplorerWidget*>()->directory().isEmpty()
+                && missing.findChild<PlayerWidget*>()->currentPath().isEmpty(), "missing last file starts blank");
+        }
+        session.directory = temporary.filePath("deleted-folder");
+        session.file.clear();
+        saved.saveSession(session);
+        {
+            MainWindow missing(&restartTheme, &saved);
+            check(missing.findChild<ExplorerWidget*>()->directory().isEmpty(), "missing root starts blank");
+        }
+    }
     check(classifyMedia(audio) == MediaType::Audio, "case insensitive audio classification");
     check(classifyMedia("test.MP4") == MediaType::Video, "case insensitive video classification");
     check(classifyMedia("notes.txt") == MediaType::Unknown, "unknown file classification");
@@ -274,6 +323,12 @@ int main(int argc, char** argv)
     check(window.openPath(otherAudio), "switch audio session");
     check(waitFor([&] { return player->state().loaded && player->state().title.contains("2"); }), "replacement session loads");
     check(completions == 0, "manual switching does not complete old media");
+    widget->handleSeekKey(1, true, false);
+    check(waitFor([&] { return player->state().rate == 2.0; }), "hold acceleration before changing defaults");
+    widget->applyPlaybackPreferences(1.75, false);
+    widget->handleSeekKey(1, false, false);
+    check(waitFor([&] { return player->state().rate == 1.75; }), "applying default speed cancels hold without restoring old speed");
+    widget->applyPlaybackPreferences(1.0, false);
     const double rateBeforeEnd = player->state().rate;
     widget->handleSeekKey(1, true, false);
     check(waitFor([&] { return player->state().rate == 2.0; }), "hold acceleration before natural end");

@@ -1,4 +1,5 @@
 #include "PlayerWidget.h"
+#include "services/SettingsService.h"
 #include "PlayerControls.h"
 #include "ui/images/ImagePane.h"
 #include "ui/common/UiComponents.h"
@@ -15,6 +16,7 @@
 #include "VideoView.h"
 #include <QGuiApplication>
 #include <QTimer>
+#include <utility>
 
 PlayerWidget::PlayerWidget(ThemeManager* theme, QWidget* parent) : QWidget(parent)
 {
@@ -160,6 +162,12 @@ PlayerWidget::PlayerWidget(ThemeManager* theme, QWidget* parent) : QWidget(paren
     playbackLayout->addWidget(m_audioPane, 1);
     m_stack->addWidget(m_playbackPane);
     connect(m_imagePane, &ImagePane::failed, this, [this](const QString& message) {
+        if (m_restoringSession) {
+            const auto path = currentPath();
+            setFile({});
+            emit fileInterrupted(path, tr("上次文件无法恢复，请重新选择。"));
+            return;
+        }
         m_formatHint->setText(message);
         m_stack->setCurrentIndex(1);
     });
@@ -180,6 +188,12 @@ PlayerWidget::PlayerWidget(ThemeManager* theme, QWidget* parent) : QWidget(paren
     connect(m_controls, &PlayerControls::rateRequested, m_playback, &MpvPlayer::setRate);
     connect(m_playback, &MpvPlayer::stateChanged, this, &PlayerWidget::syncPlayback);
     connect(m_playback, &MpvPlayer::failed, this, [this](const QString& message) {
+        if (m_restoringSession) {
+            const auto path = currentPath();
+            setFile({});
+            emit fileInterrupted(path, tr("上次文件无法恢复，请重新选择。"));
+            return;
+        }
         m_formatHint->setText(message);
         m_stack->setCurrentIndex(1);
         setPlaybackMedia(PlaybackMedia::None);
@@ -217,6 +231,8 @@ void PlayerWidget::setDirectory(const QString& path)
 void PlayerWidget::setFile(const FileDetails& details)
 {
     cancelSeekHold();
+    const auto restored = std::exchange(m_pendingSession, std::nullopt);
+    m_restoringSession = restored.has_value();
     const auto type = classifyMedia(details.path);
     if (type != MediaType::Video && type != MediaType::Audio) m_playback->stop();
     m_currentFile = details;
@@ -248,10 +264,12 @@ void PlayerWidget::setFile(const FileDetails& details)
         m_audioPane->show();
         m_audioInfo->setText(tr("正在准备播放…"));
         m_audioInfo->show();
-        m_playback->open(details.path, m_defaultRate, m_volume,
+        if (restored) { m_volume = restored->volume; m_playback->setMuted(restored->muted); }
+        m_playback->open(details.path, restored ? restored->rate : m_defaultRate, m_volume,
             QGuiApplication::platformName() == QStringLiteral("offscreen")
                 ? MpvPlayer::RenderMode::Headless : type == MediaType::Audio
-                    ? MpvPlayer::RenderMode::Audio : MpvPlayer::RenderMode::OpenGL);
+                    ? MpvPlayer::RenderMode::Audio : MpvPlayer::RenderMode::OpenGL,
+            restored ? restored->position : 0, restored && restored->paused);
         return;
     }
     m_stack->setCurrentWidget(m_imagePane);
@@ -301,7 +319,10 @@ void PlayerWidget::applyPlaybackPreferences(double rate, bool autoNext)
     const bool rateChanged = m_defaultRate != rate;
     m_defaultRate = rate;
     m_autoNext = autoNext;
-    if (rateChanged && m_playback->state().loaded) m_playback->setRate(rate);
+    if (rateChanged && m_playback->state().loaded) {
+        cancelSeekHold();
+        m_playback->setRate(rate);
+    }
 }
 void PlayerWidget::togglePause() { m_playback->togglePause(); }
 void PlayerWidget::toggleMute() { m_playback->toggleMute(); }
@@ -360,6 +381,7 @@ void PlayerWidget::syncPlayback()
     emit playbackSeekingEnabledChanged(state.loaded && state.seekable);
     setPlaybackMedia(state.loaded ? (state.video ? PlaybackMedia::Video : PlaybackMedia::Audio) : PlaybackMedia::None);
     if (!state.loaded) return;
+    m_restoringSession = false;
     if (!m_capabilityAnnounced || m_lastAccessProtected != state.accessProtected) {
         m_capabilityAnnounced = true;
         m_lastAccessProtected = state.accessProtected;
@@ -448,4 +470,21 @@ void PlayerWidget::setFullscreen(bool fullscreen)
 void PlayerWidget::setExplorerVisible(bool visible)
 {
     m_showExplorer->setVisible(!visible);
+}
+
+void PlayerWidget::captureSession(SavedSession& session) const
+{
+    session.file = currentPath();
+    const auto& state = m_playback->state();
+    if (!state.loaded) return;
+    session.position = state.seekable && !state.ended ? state.position : 0;
+    session.duration = state.duration;
+    session.rate = m_seekHoldActive && m_seekKeyDirection > 0 ? m_rateBeforeHold : state.rate;
+    session.volume = state.volume;
+    session.paused = state.paused || state.ended;
+    session.muted = state.muted;
+}
+void PlayerWidget::restoreSession(const SavedSession& session)
+{
+    m_pendingSession = session;
 }

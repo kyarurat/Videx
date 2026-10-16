@@ -102,10 +102,10 @@ void MpvPlayer::stop()
     }
 }
 
-void MpvPlayer::open(const QString& path, double rate, double volume, RenderMode mode)
+void MpvPlayer::open(const QString& path, double rate, double volume, RenderMode mode, double start, bool paused)
 {
     if (!m_yielding.isEmpty() || m_destroying) {
-        m_deferredOpen = OpenRequest{path, rate, volume, mode};
+        m_deferredOpen = OpenRequest{path, rate, volume, mode, start, paused};
         return;
     }
     // A loaded session has already delivered START_FILE/FILE_LOADED. Replace
@@ -115,6 +115,8 @@ void MpvPlayer::open(const QString& path, double rate, double volume, RenderMode
     const bool replaceLoaded = m_handle && m_state.loaded && (mode != RenderMode::OpenGL || m_renderer);
     if (replaceLoaded) { resetSession(); m_stopAcknowledged = true; }
     else stop();
+    m_startPosition = std::isfinite(start) ? std::max(0.0, start) : 0;
+    m_startPaused = paused;
     m_mode = mode;
     m_pendingFile = path;
     m_path = path;
@@ -124,7 +126,7 @@ void MpvPlayer::open(const QString& path, double rate, double volume, RenderMode
     if (m_handle) {
         setNumber("speed", rate);
         setNumber("volume", m_state.volume);
-        int pause = mode == RenderMode::Probe || m_restoreOpening ? 1 : 0;
+        int pause = mode == RenderMode::Probe || m_restoreOpening || m_startPaused ? 1 : 0;
         mpv_set_property_async(m_handle, m_generation * 8 + 7, "pause", MPV_FORMAT_FLAG, &pause);
         configureVideoOutput();
         if (mode == RenderMode::OpenGL && !m_renderer) requestRenderer();
@@ -145,7 +147,7 @@ void MpvPlayer::open(const QString& path, double rate, double volume, RenderMode
         && option("gapless-audio", "yes")
         && option("vo", headless ? "null" : "libmpv")
         && option("mute", probing || m_requestedMuted ? "yes" : "no")
-        && (!(probing || m_restoreOpening) || option("pause", "yes"))
+        && (!(probing || m_restoreOpening || m_startPaused) || option("pause", "yes"))
         && (!probing || option("ao", "null"));
     const int error = configured ? mpv_initialize(m_handle) : MPV_ERROR_OPTION_ERROR;
     if (error < 0) {
@@ -191,9 +193,29 @@ void MpvPlayer::loadPendingFile()
     connect(guard, &ExternalAccessGuard::broken, this, [this, guard](auto reason) { guardBroken(guard, reason); });
     const auto encoded = QDir::toNativeSeparators(m_pendingFile).toUtf8();
     m_pendingFile.clear();
-    const char* command[]{"loadfile", encoded.constData(), "replace", nullptr};
+    auto start = QByteArray::number(m_startPosition, 'f', 6);
+    char startKey[] = "start";
+    char* optionKeys[]{startKey};
+    mpv_node optionValues[1]{};
+    optionValues[0].format = MPV_FORMAT_STRING;
+    optionValues[0].u.string = start.data();
+    mpv_node_list options{1, optionValues, optionKeys};
+    char nameKey[] = "name", urlKey[] = "url", flagsKey[] = "flags", optionsKey[] = "options";
+    char loadName[] = "loadfile", replace[] = "replace";
+    char* keys[]{nameKey, urlKey, flagsKey, optionsKey};
+    mpv_node values[4]{};
+    values[0].format = values[1].format = values[2].format = MPV_FORMAT_STRING;
+    values[0].u.string = loadName;
+    values[1].u.string = const_cast<char*>(encoded.constData());
+    values[2].u.string = replace;
+    values[3].format = MPV_FORMAT_NODE_MAP;
+    values[3].u.list = &options;
+    mpv_node_list arguments{4, values, keys};
+    mpv_node command{};
+    command.format = MPV_FORMAT_NODE_MAP;
+    command.u.list = &arguments;
     m_loadGeneration = m_generation;
-    const int result = mpv_command_async(m_handle, m_generation * 8 + 2, command);
+    const int result = mpv_command_node_async(m_handle, m_generation * 8 + 2, &command);
     if (result < 0) {
         finishGuard(guard);
         stop();
@@ -358,7 +380,7 @@ void MpvPlayer::drainEvents()
         } else if (event->event_id == MPV_EVENT_FILE_LOADED && m_activeEntry >= 0 && m_loadGeneration == generation) {
             // keep-open can re-pause an exhausted old entry after the pre-load
             // unpause was queued. Apply the new entry's intent after loading.
-            int pause = m_mode == RenderMode::Probe || m_restoring ? 1 : 0;
+            int pause = m_mode == RenderMode::Probe || m_restoring || m_startPaused ? 1 : 0;
             mpv_set_property_async(m_handle, m_generation * 8 + 7, "pause", MPV_FORMAT_FLAG, &pause);
             m_initialReplies = 1;
             // Publish the session after an asynchronous track snapshot so the
@@ -770,7 +792,7 @@ void MpvPlayer::openDeferredFile()
     if (m_yielding.isEmpty() && !m_destroying && m_deferredOpen) {
         const auto request = *m_deferredOpen;
         m_deferredOpen.reset();
-        open(request.path, request.rate, request.volume, request.mode);
+        open(request.path, request.rate, request.volume, request.mode, request.start, request.paused);
     }
 }
 

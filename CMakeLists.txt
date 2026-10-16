@@ -29,6 +29,7 @@ set(VIDEX_SOURCES
     src/app/ThemeManager.cpp src/app/ThemeManager.h
     src/app/BrowserController.cpp src/app/BrowserController.h src/app/UiState.h
     src/services/SettingsService.cpp src/services/SettingsService.h
+    src/services/LanguageService.cpp src/services/LanguageService.h
     src/ui/MainWindow.cpp src/ui/MainWindow.h
     src/ui/common/UiComponents.cpp src/ui/common/UiComponents.h
     src/ui/common/ComboBox.cpp src/ui/common/ComboBox.h
@@ -58,6 +59,7 @@ if(WIN32)
         OBJECT_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/images/logo.ico")
 endif()
 target_link_libraries(Videx PRIVATE videx_ui)
+target_compile_definitions(Videx PRIVATE VIDEX_VERSION="${PROJECT_VERSION}")
 include(CTest)
 option(VIDEX_BUILD_BENCHMARKS "Build local RAW and media performance checks" OFF)
 if(VIDEX_BUILD_BENCHMARKS)

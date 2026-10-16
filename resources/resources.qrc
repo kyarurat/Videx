@@ -5,4 +5,7 @@
     <qresource prefix="/icons">
         <file alias="app.png">../images/logo.png</file>
     </qresource>
+    <qresource prefix="/translations">
+        <file alias="videx_en_US.qm">../translations/videx_en_US.qm</file>
+    </qresource>
 </RCC>

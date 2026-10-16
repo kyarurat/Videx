@@ -39,7 +39,7 @@ public:
     enum class RenderMode { OpenGL, Headless, Probe, Audio };
     explicit MpvPlayer(QObject* parent = nullptr);
     ~MpvPlayer() override;
-    void open(const QString& path, double rate, double volume, RenderMode mode = RenderMode::OpenGL);
+    void open(const QString& path, double rate, double volume, RenderMode mode = RenderMode::OpenGL, double start = 0, bool paused = false);
     void stop();
     void relocate(const QString& path);
     // Useful for unsupported filesystems and deterministic fallback checks.
@@ -94,6 +94,8 @@ private:
     bool m_completionEmitted = false;
     bool m_requestedMuted = false;
     mpv_render_context* m_renderer = nullptr;
+    double m_startPosition = 0;
+    bool m_startPaused = false;
     QString m_pendingFile;
     RenderMode m_mode = RenderMode::Headless;
     bool m_stopAcknowledged = false;
@@ -126,7 +128,7 @@ private:
     bool m_restoreEnded = false;
     double m_restorePosition = 0;
     double m_restoreIssuedPosition = 0;
-    struct OpenRequest { QString path; double rate; double volume; RenderMode mode; };
+    struct OpenRequest { QString path; double rate; double volume; RenderMode mode; double start; bool paused; };
     std::optional<OpenRequest> m_deferredOpen;
     bool m_destroying = false;
     QFuture<void> m_destroyFuture;

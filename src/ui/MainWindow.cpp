@@ -16,6 +16,7 @@
 #include <QLabel>
 #include <QAction>
 #include <QDir>
+#include <QFileInfo>
 #include <QStandardPaths>
 #include <QShortcut>
 #include <QEvent>
@@ -119,7 +120,18 @@ MainWindow::MainWindow(ThemeManager* theme, SettingsService* settings, QWidget* 
     connect(m_player, &PlayerWidget::statusMessage, this, statusMessage);
     connect(m_browser, &BrowserController::statusMessage, this, statusMessage);
     connect(m_player,&PlayerWidget::fullscreenRequested,this,&MainWindow::toggleFullscreen);
-    m_browser->restoreLastDirectory();
+    const auto session = settings->loadSession();
+    const QFileInfo root(session.directory), file(session.file);
+    if (m_settings.restoreDirectory && root.isDir() && root.isReadable()
+        && (!m_settings.resumePlayback || session.file.isEmpty() || (file.isFile() && file.isReadable()))) {
+        if (m_browser->openDirectory(session.directory)) {
+            if (!session.file.isEmpty() && m_settings.resumePlayback) {
+                m_player->restoreSession(session);
+                m_browser->selectFile(session.file);
+            }
+            m_explorer->restoreSession(session);
+        }
+    }
     m_applyingSettings = false;
 }
 
@@ -248,4 +260,9 @@ void MainWindow::closeEvent(QCloseEvent* event)
         ? m_beforeFullscreenGeometry : saveGeometry();
     const auto splitter = m_explorer->isHidden() ? m_visibleSplitterState : m_splitter->saveState();
     m_settingsService->saveWindowLayout(geometry, splitter);
+    SavedSession session;
+    m_explorer->captureSession(session);
+    m_player->captureSession(session);
+    if (!m_settingsService->saveSession(session))
+        qWarning("Cannot save the last browsing session");
 }

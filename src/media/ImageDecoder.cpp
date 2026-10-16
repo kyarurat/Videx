@@ -19,7 +19,7 @@
 #include <limits>
 
 namespace {
-QString tr(const char* text) { return QCoreApplication::translate("ImageDecoder", text); }
+QString imageText(const char* text) { return QCoreApplication::translate("ImageDecoder", text); }
 constexpr qint64 maximumPixels = 100000000;
 constexpr qint64 maximumFileBytes = 512LL * 1024 * 1024;
 const QStringList rawExtensions = QStringLiteral(
@@ -51,18 +51,18 @@ void readMetadata(const QByteArray& bytes, ImageResult& result)
                 return entry == exif.end() ? QString{} : QString::fromStdString(entry->print(&exif));
             };
             const std::pair<const char*, const char*> fields[] = {
-                {"相机厂商", "Exif.Image.Make"}, {"相机型号", "Exif.Image.Model"},
-                {"镜头", "Exif.Photo.LensModel"}, {"拍摄时间", "Exif.Photo.DateTimeOriginal"},
-                {"时区", "Exif.Photo.OffsetTimeOriginal"}, {"光圈", "Exif.Photo.FNumber"},
-                {"曝光时间", "Exif.Photo.ExposureTime"}, {"ISO", "Exif.Photo.ISOSpeedRatings"},
-                {"焦距", "Exif.Photo.FocalLength"}, {"35mm 等效焦距", "Exif.Photo.FocalLengthIn35mmFilm"},
-                {"曝光补偿", "Exif.Photo.ExposureBiasValue"}, {"闪光灯", "Exif.Photo.Flash"},
-                {"作者", "Exif.Image.Artist"}, {"版权", "Exif.Image.Copyright"},
-                {"软件", "Exif.Image.Software"}, {"方向", "Exif.Image.Orientation"}
+                {QT_TRANSLATE_NOOP("ImageDecoder", "相机厂商"), "Exif.Image.Make"}, {QT_TRANSLATE_NOOP("ImageDecoder", "相机型号"), "Exif.Image.Model"},
+                {QT_TRANSLATE_NOOP("ImageDecoder", "镜头"), "Exif.Photo.LensModel"}, {QT_TRANSLATE_NOOP("ImageDecoder", "拍摄时间"), "Exif.Photo.DateTimeOriginal"},
+                {QT_TRANSLATE_NOOP("ImageDecoder", "时区"), "Exif.Photo.OffsetTimeOriginal"}, {QT_TRANSLATE_NOOP("ImageDecoder", "光圈"), "Exif.Photo.FNumber"},
+                {QT_TRANSLATE_NOOP("ImageDecoder", "曝光时间"), "Exif.Photo.ExposureTime"}, {QT_TRANSLATE_NOOP("ImageDecoder", "ISO"), "Exif.Photo.ISOSpeedRatings"},
+                {QT_TRANSLATE_NOOP("ImageDecoder", "焦距"), "Exif.Photo.FocalLength"}, {QT_TRANSLATE_NOOP("ImageDecoder", "35mm 等效焦距"), "Exif.Photo.FocalLengthIn35mmFilm"},
+                {QT_TRANSLATE_NOOP("ImageDecoder", "曝光补偿"), "Exif.Photo.ExposureBiasValue"}, {QT_TRANSLATE_NOOP("ImageDecoder", "闪光灯"), "Exif.Photo.Flash"},
+                {QT_TRANSLATE_NOOP("ImageDecoder", "作者"), "Exif.Image.Artist"}, {QT_TRANSLATE_NOOP("ImageDecoder", "版权"), "Exif.Image.Copyright"},
+                {QT_TRANSLATE_NOOP("ImageDecoder", "软件"), "Exif.Image.Software"}, {QT_TRANSLATE_NOOP("ImageDecoder", "方向"), "Exif.Image.Orientation"}
             };
             for (const auto& [label, key] : fields) {
                 const auto text = value(key);
-                if (!text.isEmpty()) result.metadata.append({tr(label), text});
+                if (!text.isEmpty()) result.metadata.append({imageText(label), text});
             }
             const auto coordinate = [&exif](const char* key, const char* refKey, double& output) {
                 const auto entry = exif.findKey(Exiv2::ExifKey(key));
@@ -81,11 +81,11 @@ void readMetadata(const QByteArray& bytes, ImageResult& result)
             if (coordinate("Exif.GPSInfo.GPSLatitude", "Exif.GPSInfo.GPSLatitudeRef", latitude)
                 && coordinate("Exif.GPSInfo.GPSLongitude", "Exif.GPSInfo.GPSLongitudeRef", longitude)
                 && std::abs(latitude) <= 90 && std::abs(longitude) <= 180) {
-                result.metadata.append({tr("地理位置（纬度，经度）"),
+                result.metadata.append({QCoreApplication::translate("ImageDecoder", "地理位置（纬度，经度）"),
                     QStringLiteral("%1, %2").arg(latitude, 0, 'f', 6).arg(longitude, 0, 'f', 6)});
             }
             const auto altitude = value("Exif.GPSInfo.GPSAltitude");
-            if (!altitude.isEmpty()) result.metadata.append({tr("海拔"), altitude + " " + value("Exif.GPSInfo.GPSAltitudeRef")});
+            if (!altitude.isEmpty()) result.metadata.append({QCoreApplication::translate("ImageDecoder", "海拔"), altitude + " " + value("Exif.GPSInfo.GPSAltitudeRef")});
             int count = 0;
             for (const auto& entry : exif) {
                 if (++count > 512) break;
@@ -107,7 +107,7 @@ void readMetadata(const QByteArray& bytes, ImageResult& result)
         }
     } catch (const Exiv2::Error&) {
         // Metadata failure must not prevent viewing a successfully decoded image.
-        result.metadata.append({tr("拍摄信息"), tr("此文件没有可读取的 EXIF/IPTC 信息。")});
+        result.metadata.append({QCoreApplication::translate("ImageDecoder", "拍摄信息"), QCoreApplication::translate("ImageDecoder", "此文件没有可读取的 EXIF/IPTC 信息。")});
     }
 }
 
@@ -180,10 +180,10 @@ ImageResult ImageDecoder::decode(const QString& path, const std::shared_ptr<std:
         return result;
     };
     const QFileInfo info(path);
-    if (!info.isFile() || !info.isReadable()) return fail(tr("无法读取图片，文件可能已被移动或删除。"));
+    if (!info.isFile() || !info.isReadable()) return fail(QCoreApplication::translate("ImageDecoder", "无法读取图片，文件可能已被移动或删除。"));
     if (info.size() > maximumFileBytes) {
-        if (!isImageCandidate(path)) { result.message = tr("格式不支持"); return result; }
-        return fail(tr("文件超过 512 MiB 的读取限制。"));
+        if (!isImageCandidate(path)) { result.message = QCoreApplication::translate("ImageDecoder", "格式不支持"); return result; }
+        return fail(QCoreApplication::translate("ImageDecoder", "文件超过 512 MiB 的读取限制。"));
     }
     if (cancelled->load()) { result.status = ImageResult::Status::Cancelled; return result; }
     const auto suffix = info.suffix().toLower();
@@ -220,7 +220,7 @@ ImageResult ImageDecoder::decode(const QString& path, const std::shared_ptr<std:
     } else if (!preferRaw && qtReadable) {
         result.originalSize = reader.size();
         result.format = QString::fromLatin1(reader.format()).toUpper();
-        if (!validSize(result.originalSize)) return fail(tr("图片尺寸无效或超过 1 亿像素的限制。"));
+        if (!validSize(result.originalSize)) return fail(QCoreApplication::translate("ImageDecoder", "图片尺寸无效或超过 1 亿像素的限制。"));
         result.sourceSize = result.originalSize;
         const bool transpose = reader.transformation().testFlag(QImageIOHandler::TransformationRotate90);
         if (transpose) result.sourceSize.transpose();
@@ -231,17 +231,17 @@ ImageResult ImageDecoder::decode(const QString& path, const std::shared_ptr<std:
                                  .boundedTo(result.originalSize));
         }
         result.image = reader.read();
-        if (result.image.isNull()) return fail(tr("无法读取图片：%1").arg(reader.errorString()));
+        if (result.image.isNull()) return fail(QCoreApplication::translate("ImageDecoder", "无法读取图片：%1").arg(reader.errorString()));
         for (const auto& key : result.image.textKeys())
             result.metadata.append({key.left(256), result.image.text(key).left(4096)});
     } else if (suffix == "svg" || suffix == "svgz") {
         QSvgRenderer svg(bytes);
-        if (!svg.isValid()) return fail(tr("无法读取 SVG 图片。"));
+        if (!svg.isValid()) return fail(QCoreApplication::translate("ImageDecoder", "无法读取 SVG 图片。"));
         result.originalSize = svg.defaultSize();
-        if (!validSize(result.originalSize)) return fail(tr("SVG 尺寸无效或过大。"));
+        if (!validSize(result.originalSize)) return fail(QCoreApplication::translate("ImageDecoder", "SVG 尺寸无效或过大。"));
         result.image = QImage(targetSize.isValid() ? result.originalSize.scaled(targetSize, Qt::KeepAspectRatio)
                              .boundedTo(result.originalSize) : result.originalSize, QImage::Format_ARGB32_Premultiplied);
-        if (result.image.isNull()) return fail(tr("图片所需内存不足。"));
+        if (result.image.isNull()) return fail(QCoreApplication::translate("ImageDecoder", "图片所需内存不足。"));
         result.image.fill(Qt::transparent);
         QPainter painter(&result.image);
         svg.render(&painter);
@@ -253,15 +253,15 @@ ImageResult ImageDecoder::decode(const QString& path, const std::shared_ptr<std:
         int error = alreadyOpened ? LIBRAW_SUCCESS : raw.open_buffer(const_cast<char*>(bytes.constData()), bytes.size());
         if (error != LIBRAW_SUCCESS) {
             if (rawCandidate && error == LIBRAW_FILE_UNSUPPORTED) {
-                result.message = tr("格式不支持");
+                result.message = QCoreApplication::translate("ImageDecoder", "格式不支持");
                 return result;
             }
-            if (rawCandidate || isImageCandidate(path)) return fail(tr("无法读取图片，文件可能已损坏或使用了尚不支持的编码。"));
-            result.message = tr("格式不支持");
+            if (rawCandidate || isImageCandidate(path)) return fail(QCoreApplication::translate("ImageDecoder", "无法读取图片，文件可能已损坏或使用了尚不支持的编码。"));
+            result.message = QCoreApplication::translate("ImageDecoder", "格式不支持");
             return result;
         }
         result.originalSize = QSize(raw.imgdata.sizes.width, raw.imgdata.sizes.height);
-        if (!validSize(result.originalSize)) return fail(tr("RAW 图片超过 1 亿像素的限制。"));
+        if (!validSize(result.originalSize)) return fail(QCoreApplication::translate("ImageDecoder", "RAW 图片超过 1 亿像素的限制。"));
         result.sourceSize = result.originalSize;
         const int flip = raw.imgdata.sizes.flip;
         if (flip == 5 || flip == 6) result.sourceSize.transpose();
@@ -286,25 +286,25 @@ ImageResult ImageDecoder::decode(const QString& path, const std::shared_ptr<std:
             raw.imgdata.params.half_size = targetSize.isValid() ? 1 : 0;
             if ((error = raw.unpack()) == LIBRAW_SUCCESS) error = raw.dcraw_process();
             if (cancelled->load()) { result.status = ImageResult::Status::Cancelled; return result; }
-            if (error != LIBRAW_SUCCESS) return fail(tr("RAW 解码失败：%1").arg(QString::fromLatin1(libraw_strerror(error))));
+            if (error != LIBRAW_SUCCESS) return fail(QCoreApplication::translate("ImageDecoder", "RAW 解码失败：%1").arg(QString::fromLatin1(libraw_strerror(error))));
             std::unique_ptr<libraw_processed_image_t, decltype(&LibRaw::dcraw_clear_mem)> decoded(
                 raw.dcraw_make_mem_image(&error), &LibRaw::dcraw_clear_mem);
             if (!decoded || decoded->type != LIBRAW_IMAGE_BITMAP || decoded->colors != 3 || decoded->bits != 8)
-                return fail(tr("RAW 解码未能生成可显示的图片。"));
+                return fail(QCoreApplication::translate("ImageDecoder", "RAW 解码未能生成可显示的图片。"));
             result.image = QImage(decoded->data, decoded->width, decoded->height,
                                   decoded->width * 3, QImage::Format_RGB888).copy();
             if (!targetSize.isValid()) result.sourceSize = result.image.size();
         }
         result.format = QStringLiteral("RAW");
         if (rawCandidate) result.format += " / " + suffix.toUpper();
-        result.metadata.append({tr("相机厂商"), QString::fromUtf8(raw.imgdata.idata.make)});
-        result.metadata.append({tr("相机型号"), QString::fromUtf8(raw.imgdata.idata.model)});
+        result.metadata.append({QCoreApplication::translate("ImageDecoder", "相机厂商"), QString::fromUtf8(raw.imgdata.idata.make)});
+        result.metadata.append({QCoreApplication::translate("ImageDecoder", "相机型号"), QString::fromUtf8(raw.imgdata.idata.model)});
         if (raw.imgdata.other.aperture > 0)
-            result.metadata.append({tr("光圈"), QStringLiteral("f/%1").arg(raw.imgdata.other.aperture, 0, 'f', 1)});
+            result.metadata.append({QCoreApplication::translate("ImageDecoder", "光圈"), QStringLiteral("f/%1").arg(raw.imgdata.other.aperture, 0, 'f', 1)});
         result.image.setColorSpace(QColorSpace::SRgb);
     }
     if (cancelled->load()) { result.image = {}; result.status = ImageResult::Status::Cancelled; return result; }
-    if (result.image.isNull()) return fail(tr("图片所需内存不足。"));
+    if (result.image.isNull()) return fail(QCoreApplication::translate("ImageDecoder", "图片所需内存不足。"));
     if (!result.sourceSize.isValid()) result.sourceSize = result.originalSize;
     if (targetSize.isValid() && (result.image.width() > targetSize.width() || result.image.height() > targetSize.height()))
         result.image = result.image.scaled(targetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation);

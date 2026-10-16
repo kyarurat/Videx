@@ -3,6 +3,8 @@
 #include <QWidget>
 #include <QStringList>
 #include "media/MediaType.h"
+#include "services/SettingsService.h"
+#include <optional>
 class QLabel;
 class QStackedWidget;
 class EmptyState;
@@ -20,6 +22,8 @@ public:
     enum class PlaybackMedia { None, Video, Audio };
     explicit PlayerWidget(ThemeManager* theme, QWidget* parent = nullptr);
     ~PlayerWidget() override;
+    void captureSession(SavedSession& session) const;
+    void restoreSession(const SavedSession& session);
     void setDirectory(const QString& path);
     void setFile(const FileDetails& details);
     void refreshFileDetails(const FileDetails& details);
@@ -53,6 +57,8 @@ signals:
 private:
     bool eventFilter(QObject* watched, QEvent* event) override;
     void syncPlayback();
+    bool m_restoringSession = false;
+    std::optional<SavedSession> m_pendingSession;
     MpvPlayer* m_playback;
     QWidget* m_playbackPane;
     QWidget* m_videoSurface;
